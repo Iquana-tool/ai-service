@@ -28,15 +28,22 @@ from iquana_toolbox.schemas.model_info import ModelInfo
 from iquana_toolbox.schemas.prompts import Prompts
 from iquana_service_core import register_model
 
-from models.base import CapabilityModel, InstanceSuggestion, PromptedSegmentation
+from models import concat_ops
+from models.base import (
+    CapabilityModel,
+    CrossImageSuggestion,
+    InstanceSuggestion,
+    PromptedSegmentation,
+)
 from paths import HF_ACCESS_TOKEN
 
 logger = getLogger(__name__)
 
 
 @register_model
-class SAM3(InstanceSuggestion, PromptedSegmentation, CapabilityModel):
-    """SAM 3 (Meta) as a multi-task model: instance suggestion + prompted segmentation."""
+class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, CapabilityModel):
+    """SAM 3 (Meta) as a multi-task model: instance suggestion, prompted segmentation, and
+    cross-image concept transfer (via the concat workaround)."""
 
     # InstanceSuggestion is listed first so the legacy single ``task`` tag (and the
     # ModelInfo subclass chosen on read) stays "instance-suggestion", matching how
@@ -223,3 +230,67 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CapabilityModel):
             min(1.0, xmax) * width,
             min(1.0, ymax) * height,
         ]
+
+    # -- capability handler: cross-image concept transfer ------------------- #
+    def suggest_cross_image(
+        self, request, params: dict[str, Any] | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Suggest instances of a concept on the target image from cross-image exemplars.
+
+        SAM 3 is intra-image, so the exemplar image(s) are composited beside the target on one
+        canvas (see :mod:`models.concat_ops`); the exemplars' mask bboxes become positive visual
+        prompts (label 1) that push the concept across the seam. SAM 3 runs over the whole canvas
+        and we keep only the detections that land mostly on the target region, cropped back to
+        target coordinates. Returns ``(masks, scores)`` like instance suggestion.
+
+        The composite halves effective resolution and introduces a positional seam -- the known
+        limits of the concat trick; ``min_target_frac`` (params) tunes how strictly a detection
+        must sit on the target to be kept.
+        """
+        params = params or {}
+        threshold = params.get("threshold", self.threshold)
+        mask_threshold = params.get("mask_threshold", self.mask_threshold)
+        min_target_frac = params.get("min_target_frac", 0.5)
+
+        target = request.image
+        exemplar_images = [exemplar.image for exemplar in request.exemplars]
+        exemplar_masks = [exemplar.exemplar_mask for exemplar in request.exemplars]
+
+        plan = concat_ops.plan_layout(target.shape[:2], [im.shape[:2] for im in exemplar_images])
+        canvas = concat_ops.composite_image(target, exemplar_images, plan)
+        boxes = concat_ops.exemplar_boxes_on_canvas(exemplar_masks, plan)
+
+        inputs = self.processor(
+            images=[canvas],
+            text=request.concept.name if request.concept is not None else "visual",
+            input_boxes=[boxes],
+            input_boxes_labels=torch.tensor([[1] * len(boxes)], dtype=torch.int64),
+            return_tensors="pt",
+        )
+        inputs.to(self.device)
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+
+        results = self.processor.post_process_instance_segmentation(
+            outputs,
+            threshold=threshold,
+            mask_threshold=mask_threshold,
+            target_sizes=inputs.get("original_sizes").tolist(),
+        )[0]
+
+        canvas_masks = results["masks"].cpu().numpy()
+        canvas_scores = results["scores"].cpu().numpy()
+
+        empty = np.zeros((0, target.shape[0], target.shape[1]), dtype=np.uint8), np.zeros((0,))
+        if len(canvas_scores) == 0:
+            return empty
+
+        target_masks, kept_idx = concat_ops.extract_target_masks(
+            canvas_masks, plan.target_xywh, min_target_frac=min_target_frac
+        )
+        if not target_masks:
+            return empty
+
+        masks = np.stack([m.astype(np.uint8) for m in target_masks], axis=0)
+        scores = canvas_scores[kept_idx]
+        return masks, scores

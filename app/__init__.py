@@ -37,6 +37,11 @@ from app.routes.instance_seg import (
     router as instance_seg_router,
     session_router as instance_seg_session_router,
 )
+from app.routes.embed import router as embed_router
+from app.routes.cross_image import (
+    router as cross_image_router,
+    session_router as cross_image_session_router,
+)
 from app.routes.training import router as training_router
 from paths import ALLOWED_ORIGINS, SERVICE_DESCRIPTION, SERVICE_NAME
 
@@ -74,6 +79,16 @@ TASK_MOUNTS: list[TaskMount] = [
         task="instance-segmentation",
         prefix="/instance-segmentation",
         routers=[instance_seg_router, instance_seg_session_router, training_router],
+    ),
+    TaskMount(
+        task="embed",
+        prefix="/embed",
+        routers=[embed_router],
+    ),
+    TaskMount(
+        task="cross-image-suggestion",
+        prefix="/cross-image-suggestion",
+        routers=[cross_image_router, cross_image_session_router],
     ),
 ]
 

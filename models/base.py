@@ -58,6 +58,8 @@ from typing import Any, ClassVar
 from iquana_toolbox.ai.base_classes import BaseModel
 from iquana_toolbox.schemas.networking.http.services import (
     BaseServiceRequest,
+    CrossImageSuggestionRequest,
+    EmbedRequest,
     InstanceSegmentationRequest,
     InstanceSuggestionRequest,
     PromptedSegmentationRequest,
@@ -130,6 +132,10 @@ INSTANCE_SUGGESTION = register_task(
 INSTANCE_SEGMENTATION = register_task(
     "instance-segmentation", InstanceSegmentationRequest, "segment_instances"
 )
+EMBED = register_task("embed", EmbedRequest, "embed")
+CROSS_IMAGE_SUGGESTION = register_task(
+    "cross-image-suggestion", CrossImageSuggestionRequest, "suggest_cross_image"
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -170,6 +176,35 @@ class InstanceSegmentation(TaskCapability):
     TASK = INSTANCE_SEGMENTATION
 
     def segment_instances(self, request: InstanceSegmentationRequest, params: dict[str, Any]):
+        raise NotImplementedError
+
+
+class CrossImageSuggestion(TaskCapability):
+    """Suggest instances of a concept on a target image, using exemplars from other images.
+
+    The cross-image counterpart to :class:`InstanceSuggestion`: where that suggests from
+    exemplar masks on the *same* image, this transfers a concept across images (e.g. SAM 3's
+    concat workaround). Returns ``(masks, scores)`` on the target image, like suggestion.
+    """
+
+    TASK = CROSS_IMAGE_SUGGESTION
+
+    def suggest_cross_image(self, request: CrossImageSuggestionRequest, params: dict[str, Any]):
+        raise NotImplementedError
+
+
+class Embedding(TaskCapability):
+    """Precompute dense feature embeddings for an image and/or its masked regions.
+
+    Backs cross-image exemplar retrieval: the returned vectors are persisted and later
+    compared by cosine similarity to pick the exemplar to hand a cross-image segmenter.
+    A model returns one :class:`EmbeddingVector` per requested whole-image kind and per
+    region; unknown kinds are skipped rather than erroring.
+    """
+
+    TASK = EMBED
+
+    def embed(self, request: EmbedRequest, params: dict[str, Any]):
         raise NotImplementedError
 
 
