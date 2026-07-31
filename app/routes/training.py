@@ -33,3 +33,10 @@ async def cancel_training(task_id: str):
     task = AsyncResult(task_id)
     task.revoke(terminate=True)
     return {"message": "Training cancelled"}
+
+
+@router.get("/train/{task_id}")
+async def get_training_task_state(task_id: str):
+    """Return the Celery state used to reconcile a training run's MLflow state."""
+    task = AsyncResult(task_id)
+    return {"task_id": task_id, "state": task.state}
