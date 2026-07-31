@@ -72,3 +72,6 @@ iquana-toolbox = { git = "https://github.com/Iquana-tool/iquana-toolbox.git" }
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
