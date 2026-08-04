@@ -5,6 +5,7 @@ returns its task id; the gateway polls progress via MLflow (the task tags its
 run with ``celery_task_id``).
 """
 import logging
+from typing import Optional
 
 from celery.result import AsyncResult
 from fastapi import APIRouter
@@ -18,11 +19,21 @@ router = APIRouter()
 
 
 @router.post("/train")
-async def start_training(request: InstanceSegmentationTrainingRequest):
-    """Start a training job asynchronously. Delegates to Celery workers."""
+async def start_training(
+    request: InstanceSegmentationTrainingRequest,
+    model_run_name: Optional[str] = None,
+):
+    """Start a training job asynchronously. Delegates to Celery workers.
+
+    Args:
+        request: Typed training configuration (labels, hyperparameters, etc.).
+        model_run_name: Optional human-readable alias for this run stored as an
+            MLflow tag.  Surfaced in the run-history UI as a display name.
+    """
     validate_model(request)
     task = train_and_register_model.delay(
         request_dict=request.model_dump(),  # serialize to dict for Celery/Redis
+        model_run_name=model_run_name,
     )
     return {"task_id": task.id}
 

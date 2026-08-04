@@ -17,9 +17,13 @@ TRAINING_EXPERIMENT = "instance-segmentation-training"
 
 
 @app.task(bind=True)
-def train_and_register_model(self, request_dict: dict):
+def train_and_register_model(self, request_dict: dict, model_run_name: str | None = None):
     """Generic training dispatcher. Loads the model from the registry and
     delegates all training logic to the model's own ``train()`` method.
+
+    Args:
+        request_dict: Serialised ``InstanceSegmentationTrainingRequest`` dict.
+        model_run_name: Optional human-readable alias stored as an MLflow tag.
     """
     try:
         registry: MLFlowModelRegistry = MLFlowModelRegistry(MLFLOW_URL)
@@ -44,6 +48,9 @@ def train_and_register_model(self, request_dict: dict):
             mlflow.set_tag("celery_task_id", self.request.id)
             mlflow.set_tag("dataset_id", str(request.dataset_id))
             mlflow.set_tag("user_id", str(request.user_id))
+            if model_run_name:
+                # Surface the user-supplied alias in the MLflow UI and run history.
+                mlflow.set_tag("run_name", model_run_name)
             model.train(request)  # logs params + per-epoch loss/epoch to this active run
 
         # Register the fine-tuned model. register_model opens its own MLflow run, so
