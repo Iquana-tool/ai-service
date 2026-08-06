@@ -62,5 +62,9 @@ def train_and_register_model(self, request_dict: dict, model_run_name: str | Non
 
         return {"status": "completed"}
     except Exception as e:
-        logger.error(f"Training failed: {e}")
-        raise self.retry(countdown=60, max_retries=3)
+        # exc_info + exc=e are both needed to see anything useful: without the traceback the
+        # worker log shows a bare message, and without ``exc`` the retry drops the original
+        # exception, so once the retries are used up the task fails with a contextless
+        # MaxRetriesExceededError instead of the error that actually broke training.
+        logger.error("Training failed: %s", e, exc_info=True)
+        raise self.retry(exc=e, countdown=60, max_retries=3)
