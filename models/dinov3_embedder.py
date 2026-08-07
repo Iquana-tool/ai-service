@@ -1,6 +1,6 @@
 """DINOv3 feature embedder -- the default model behind the ``embed`` capability.
 
-Wraps the frozen DINOv3 backbone (:mod:`iquana_toolbox.ai.backbones.dinov3`) and turns an
+Wraps the frozen DINOv3 backbone (:mod:`models.backbones.dinov3`) and turns an
 image (and optional masked regions) into the named embedding kinds the retrieval store
 expects:
 
@@ -21,12 +21,12 @@ from typing import Any
 
 import numpy as np
 
-from iquana_toolbox.ai.backbones.dinov3 import DEFAULT_DINOV3_MODEL, DINOv3Backbone
 from iquana_toolbox.schemas.model_info import ModelInfo
 from iquana_toolbox.schemas.networking.http.services import EmbedRequest, EmbeddingVector
 from iquana_service_core import register_model
 
 from models import embedding_ops as ops
+from models.backbones.dinov3 import DEFAULT_DINOV3_MODEL, DINOv3Backbone
 from models.base import CapabilityModel, Embedding
 from paths import HF_ACCESS_TOKEN
 
