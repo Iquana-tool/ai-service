@@ -23,7 +23,7 @@ import numpy as np
 
 from iquana_toolbox.schemas.model_info import ModelInfo
 from iquana_toolbox.schemas.networking.http.services import EmbedRequest, EmbeddingVector
-from iquana_service_core import register_model
+from models.registry import register_model
 
 from models import embedding_ops as ops
 from models.backbones.dinov3 import DEFAULT_DINOV3_MODEL, DINOv3Backbone

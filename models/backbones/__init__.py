@@ -8,9 +8,8 @@ training backprop into the head without a process boundary.
 
 They live in this service rather than in ``iquana-toolbox`` because they are the
 only reason a consumer would need ``torch``/``transformers``: the toolbox is also
-installed by the backend and by ``iquana-service-core``, neither of which runs a
-model. Keeping the heavy weights here lets the toolbox stay a schema/registry
-library.
+installed by the backend, which does not run a model. Keeping the heavy weights
+here lets the toolbox stay a schema/registry library.
 """
 
 from models.backbones.dinov3 import DEFAULT_DINOV3_MODEL, DINOv3Backbone

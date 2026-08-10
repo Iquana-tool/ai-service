@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # --- shared service plumbing ---
-    "iquana-service-core",
     "iquana-toolbox",
     "fastapi[standard]>=0.122.0",
     "celery>=5.6.2",
@@ -58,15 +57,11 @@ torchvision = [
   { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 geco = { git = "https://github.com/robertleist/GeCo.git" }
-# service-core is edited heavily during the migration, so it is an editable path
-# source for a fast local loop. toolbox stays on git because service-core's own
-# pyproject pins it via git -- declaring a *path* here as well makes uv see two
-# conflicting URLs for iquana-toolbox. Once the migration needs local toolbox
-# edits too, promote both to a uv workspace so path sources stay consistent.
-iquana-service-core = { path = "../iquana-service-core", editable = true }
+# toolbox is the one remaining shared IQUANA package (it is also used by the
+# backend, which is why it stays torch-free). It is now the only consumer-side
+# pin, so a local path source is free to use when toolbox needs local edits:
+# iquana-toolbox = { path = "../iquana-toolbox", editable = true }
 iquana-toolbox = { git = "https://github.com/Iquana-tool/iquana-toolbox.git" }
-# For a fully offline / pushed setup, swap service-core to git as well:
-# iquana-service-core = { git = "https://github.com/Iquana-tool/iquana-service-core.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
