@@ -26,7 +26,7 @@ from transformers.models.sam3 import Sam3Model, Sam3Processor
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.model_info import ModelInfo
 from iquana_toolbox.schemas.prompts import Prompts
-from iquana_service_core import register_model
+from models.registry import register_model
 
 from models import concat_ops
 from models.base import (

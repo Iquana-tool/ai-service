@@ -1667,7 +1667,6 @@ dependencies = [
     { name = "geco" },
     { name = "huggingface-hub" },
     { name = "hydra-core" },
-    { name = "iquana-service-core" },
     { name = "iquana-toolbox" },
     { name = "mlflow" },
     { name = "numpy" },
@@ -1714,7 +1713,6 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.3.0" },
     { name = "hydra-core", specifier = ">=1.3.2" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=7.3.0" },
-    { name = "iquana-service-core", editable = "../iquana-service-core" },
     { name = "iquana-toolbox", git = "https://github.com/Iquana-tool/iquana-toolbox.git" },
     { name = "mlflow", specifier = ">=2.10.0" },
     { name = "numpy", specifier = ">=2.3.3" },
@@ -1744,21 +1742,6 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.56.0" },
 ]
 provides-extras = ["dev"]
-
-[[package]]
-name = "iquana-service-core"
-version = "0.1.0"
-source = { editable = "../iquana-service-core" }
-dependencies = [
-    { name = "fastapi", extra = ["standard"] },
-    { name = "iquana-toolbox" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", extras = ["standard"] },
-    { name = "iquana-toolbox", git = "https://github.com/Iquana-tool/iquana-toolbox.git" },
-]
 
 [[package]]
 name = "iquana-toolbox"

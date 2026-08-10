@@ -2,7 +2,7 @@
 
 Lives in this service (not in ``iquana-toolbox``) because it is the only consumer
 of ``torch``/``torchvision`` outside a model: the toolbox is also installed by the
-backend and by ``iquana-service-core``, neither of which trains anything.
+backend, which does not train anything.
 """
 
 from typing import Optional, Callable, Dict, Any, List

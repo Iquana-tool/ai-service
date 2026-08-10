@@ -20,7 +20,7 @@ from transformers import Sam2Model, Sam2Processor
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.model_info import PromptedSegmentationModelInfo
 from iquana_toolbox.schemas.prompts import Prompts
-from iquana_service_core import register_model
+from models.registry import register_model
 
 from models.base import CapabilityModel, PromptedSegmentation
 from paths import HUGGINGFACE_TOKEN
