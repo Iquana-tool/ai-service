@@ -59,6 +59,9 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
             "Instance suggestion: provide one or more positive exemplar masks; an optional "
             "concept label guides text-prompted detection. Prompted segmentation: provide a "
             "box (or a polygon/points, whose bounding box is used) to segment one object. "
+            "Cross-image: only the top-ranked exemplar is used -- the concat workaround pastes "
+            "its whole source image beside the target, so a second one would halve the "
+            "target's resolution. "
             "Tune `threshold` (detection sensitivity, default 0.3 -- lower finds more) and "
             "`mask_threshold` per request via params."
         ),
@@ -237,11 +240,20 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
     ) -> tuple[np.ndarray, np.ndarray]:
         """Suggest instances of a concept on the target image from cross-image exemplars.
 
-        SAM 3 is intra-image, so the exemplar image(s) are composited beside the target on one
-        canvas (see :mod:`models.concat_ops`); the exemplars' mask bboxes become positive visual
-        prompts (label 1) that push the concept across the seam. SAM 3 runs over the whole canvas
+        SAM 3 is intra-image, so the exemplar's image is composited beside the target on one
+        canvas (see :mod:`models.concat_ops`); the exemplar's mask bbox becomes a positive visual
+        prompt (label 1) that pushes the concept across the seam. SAM 3 runs over the whole canvas
         and we keep only the detections that land mostly on the target region, cropped back to
         target coordinates. Returns ``(masks, scores)`` like instance suggestion.
+
+        **Only the best-ranked exemplar is used**, however many the caller sent. The request's
+        unit is the instance, but this handler's unit is the *image*: each exemplar drags its
+        whole source image onto the canvas, and the processor then resizes that canvas to a
+        fixed input, so a second exemplar image halves what is left of the target -- fatal when
+        the instances are small. That is a limit of the concat workaround, not of the task; a
+        genuine in-context method consumes the instances themselves and would use all of them.
+        Dropping the rest here rather than asking the caller for one keeps the task's contract
+        model-agnostic (see the cross-image orchestration in the backend).
 
         The composite halves effective resolution and introduces a positional seam -- the known
         limits of the concat trick; ``min_target_frac`` (params) tunes how strictly a detection
@@ -252,9 +264,16 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
         mask_threshold = params.get("mask_threshold", self.mask_threshold)
         min_target_frac = params.get("min_target_frac", 0.5)
 
+        exemplars = request.exemplars[:1]
+        if len(request.exemplars) > 1:
+            logger.info(
+                "SAM3 cross-image: using the top exemplar of %d (one concatenated image).",
+                len(request.exemplars),
+            )
+
         target = request.image
-        exemplar_images = [exemplar.image for exemplar in request.exemplars]
-        exemplar_masks = [exemplar.exemplar_mask for exemplar in request.exemplars]
+        exemplar_images = [exemplar.image for exemplar in exemplars]
+        exemplar_masks = [exemplar.exemplar_mask for exemplar in exemplars]
 
         plan = concat_ops.plan_layout(target.shape[:2], [im.shape[:2] for im in exemplar_images])
         canvas = concat_ops.composite_image(target, exemplar_images, plan)
