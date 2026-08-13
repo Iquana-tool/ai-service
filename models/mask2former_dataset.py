@@ -7,6 +7,7 @@ lossless conversion between the two spaces and the validation of exported data.
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -16,6 +17,20 @@ import numpy as np
 from torch.utils.data import Dataset
 
 INSTANCE_IGNORE_INDEX = 255
+
+
+def split_dataset_indices(dataset_size: int, seed: int = 42) -> tuple[list[int], list[int]]:
+    """Return deterministic, disjoint train and validation image indices."""
+    if dataset_size < 0:
+        raise ValueError("dataset_size must be non-negative.")
+    indices = list(range(dataset_size))
+    if dataset_size < 2:
+        return indices, []
+
+    validation_size = min(dataset_size - 1, max(1, round(dataset_size * 0.2)))
+    validation_indices = set(random.Random(seed).sample(indices, validation_size))
+    train_indices = [index for index in indices if index not in validation_indices]
+    return train_indices, sorted(validation_indices)
 
 
 class CocoTrainingDataError(ValueError):

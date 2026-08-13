@@ -20,7 +20,7 @@ session_router = APIRouter(prefix="/annotation_session", tags=["annotation_sessi
 @session_router.post("/run")
 async def infer_instances(request: InstanceSuggestionRequest):
     """Infer instances from seed instances."""
-    model = MODEL_REGISTRY.get_model_by_alias(request.model_registry_key, "latest")
+    model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
     # model is an MLflow PyFuncModel; predict(data) forwards to the model's
     # predict(context, model_input=data, params), returning (masklets, scores).
     # The explicit task disambiguates suggestion from same-request-type tasks

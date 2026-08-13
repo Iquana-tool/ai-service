@@ -180,14 +180,39 @@ def test_real_mask2former_train_step_on_cpu(
         model._model.class_predictor.weight.detach().cpu(),
     )
 
-    assert len(logged_metrics) == 1
-    metrics, step = logged_metrics[0]
-    assert step == 1
-    assert math.isfinite(metrics["loss"])
-    assert metrics["processed_batches"] == 1
-    assert metrics["processed_samples"] == 2
+    assert len(logged_metrics) == 2
+    loss_metrics, loss_step = logged_metrics[0]
+    assert loss_step == 1
+    assert math.isfinite(loss_metrics["loss"])
+    assert loss_metrics["processed_batches"] == 1
+    assert loss_metrics["processed_samples"] == 1
+    validation_metrics, validation_step = logged_metrics[1]
+    assert validation_step == 1
+    assert math.isfinite(validation_metrics["val_mask_ap"])
+    assert math.isfinite(validation_metrics["val_mask_ap50"])
+    assert math.isfinite(validation_metrics["val_mask_ap75"])
+    assert math.isfinite(validation_metrics["val_mask_iou_macro"])
+    assert math.isfinite(validation_metrics["val_mask_f1_macro"])
+    assert math.isfinite(validation_metrics["val_mask_precision_macro"])
+    assert math.isfinite(validation_metrics["val_mask_recall_macro"])
+    label_metric_keys = [
+        key for key in validation_metrics if "_label_" in key
+    ]
+    assert label_metric_keys
+    assert all(math.isfinite(validation_metrics[key]) for key in label_metric_keys)
     assert progress_updates == [
-        {"epoch": 1, "loss": metrics["loss"], "processed_batches": 1}
+        {
+            "epoch": 1,
+            "loss": loss_metrics["loss"],
+            "processed_batches": 1,
+            "val_mask_ap": validation_metrics["val_mask_ap"],
+            "val_mask_ap50": validation_metrics["val_mask_ap50"],
+            "val_mask_ap75": validation_metrics["val_mask_ap75"],
+            "val_mask_iou_macro": validation_metrics["val_mask_iou_macro"],
+            "val_mask_f1_macro": validation_metrics["val_mask_f1_macro"],
+            "val_mask_precision_macro": validation_metrics["val_mask_precision_macro"],
+            "val_mask_recall_macro": validation_metrics["val_mask_recall_macro"],
+        }
     ]
 
     tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"

@@ -5,13 +5,13 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import cv2
 import mlflow
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from transformers import Mask2FormerForUniversalSegmentation, Mask2FormerImageProcessor
 
 from iquana_service_core import register_model
@@ -26,6 +26,7 @@ from models.mask2former_dataset import (
     CocoInstanceDataset,
     CocoTrainingDataError,
     LabelMapping,
+    split_dataset_indices,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,10 @@ _LABEL_MAPPING_FILENAME = "label_mapping.json"
 _IGNORE_INDEX = INSTANCE_IGNORE_INDEX
 _MIN_LEARNING_RATE = 1e-8
 _MAX_LEARNING_RATE = 1.0
+_DEFAULT_INSTANCE_THRESHOLD = 0.5
+_AP_IOU_THRESHOLDS = tuple(round(float(value), 2) for value in np.arange(0.5, 0.96, 0.05))
+_AP_RECALL_THRESHOLDS = np.linspace(0.0, 1.0, 101)
+_AP_MAX_DETECTIONS_PER_IMAGE = 100
 
 
 class TrainingCancelled(RuntimeError):
@@ -56,6 +61,170 @@ def validate_hyperparameters(hyperparameters: dict[str, Any]) -> tuple[int, floa
     if not 1 <= batch_size <= 16:
         raise ValueError("batch_size must be between 1 and 16.")
     return epochs, learning_rate, batch_size
+
+
+def compute_mask_metrics(
+    predicted_masks: Sequence[Mapping[int, np.ndarray]],
+    target_masks: Sequence[Mapping[int, np.ndarray]],
+) -> dict[str, float]:
+    """Calculate flat per-label mask IoU, F1, precision, recall, and averages."""
+    if len(predicted_masks) != len(target_masks):
+        raise ValueError("Predicted and target mask batches must have equal length.")
+
+    counts: dict[int, list[int]] = {}
+    for predicted_by_label, target_by_label in zip(predicted_masks, target_masks):
+        for label_id in set(predicted_by_label) | set(target_by_label):
+            predicted_value = predicted_by_label.get(label_id)
+            target_value = target_by_label.get(label_id)
+            if predicted_value is None and target_value is None:
+                continue
+            if predicted_value is None:
+                predicted_value = np.zeros_like(target_value, dtype=bool)
+            if target_value is None:
+                target_value = np.zeros_like(predicted_value, dtype=bool)
+            predicted = np.asarray(predicted_value, dtype=bool)
+            target = np.asarray(target_value, dtype=bool)
+            if predicted.shape != target.shape:
+                raise ValueError("Predicted and target masks must have equal shapes.")
+            intersection = int(np.count_nonzero(predicted & target))
+            predicted_pixels = int(np.count_nonzero(predicted))
+            target_pixels = int(np.count_nonzero(target))
+            label_counts = counts.setdefault(int(label_id), [0, 0, 0])
+            label_counts[0] += intersection
+            label_counts[1] += predicted_pixels
+            label_counts[2] += target_pixels
+
+    metrics: dict[str, float] = {}
+    macro_iou: list[float] = []
+    macro_f1: list[float] = []
+    macro_precision: list[float] = []
+    macro_recall: list[float] = []
+    for label_id in sorted(counts):
+        intersection, predicted_pixels, target_pixels = counts[label_id]
+        union = predicted_pixels + target_pixels - intersection
+        total = predicted_pixels + target_pixels
+        if union == 0:
+            continue
+        iou = intersection / union
+        f1 = (2.0 * intersection / total) if total else 0.0
+        precision = (intersection / predicted_pixels) if predicted_pixels else 0.0
+        recall = (intersection / target_pixels) if target_pixels else 0.0
+        metrics[f"val_mask_iou_label_{label_id}"] = float(iou)
+        metrics[f"val_mask_f1_label_{label_id}"] = float(f1)
+        metrics[f"val_mask_precision_label_{label_id}"] = float(precision)
+        metrics[f"val_mask_recall_label_{label_id}"] = float(recall)
+        if target_pixels > 0:
+            macro_iou.append(iou)
+            macro_f1.append(f1)
+            macro_precision.append(precision)
+            macro_recall.append(recall)
+
+    metrics["val_mask_iou_macro"] = float(np.mean(macro_iou)) if macro_iou else 0.0
+    metrics["val_mask_f1_macro"] = float(np.mean(macro_f1)) if macro_f1 else 0.0
+    metrics["val_mask_precision_macro"] = (
+        float(np.mean(macro_precision)) if macro_precision else 0.0
+    )
+    metrics["val_mask_recall_macro"] = (
+        float(np.mean(macro_recall)) if macro_recall else 0.0
+    )
+    return metrics
+
+
+def compute_instance_ap_metrics(
+    predicted_instances: Sequence[Sequence[Mapping[str, Any]]],
+    target_instances: Sequence[Sequence[Mapping[str, Any]]],
+) -> dict[str, float]:
+    """Calculate COCO-style mask AP, AP50, and AP75 for flat instances."""
+    if len(predicted_instances) != len(target_instances):
+        raise ValueError("Predicted and target instance batches must have equal length.")
+
+    labels_with_targets = sorted({
+        int(instance["label_id"])
+        for image_instances in target_instances
+        for instance in image_instances
+    })
+    if not labels_with_targets:
+        return {"val_mask_ap": 0.0, "val_mask_ap50": 0.0, "val_mask_ap75": 0.0}
+
+    average_precision: dict[tuple[int, float], float] = {}
+    for label_id in labels_with_targets:
+        targets_by_image: list[list[np.ndarray]] = []
+        predictions: list[tuple[float, int, np.ndarray]] = []
+        for image_index, (image_predictions, image_targets) in enumerate(
+            zip(predicted_instances, target_instances)
+        ):
+            targets = [
+                np.asarray(instance["mask"], dtype=bool)
+                for instance in image_targets
+                if int(instance["label_id"]) == label_id
+            ]
+            targets_by_image.append(targets)
+            candidates = sorted(
+                (
+                    (
+                        float(instance["score"]),
+                        image_index,
+                        np.asarray(instance["mask"], dtype=bool),
+                    )
+                    for instance in image_predictions
+                    if int(instance["label_id"]) == label_id
+                ),
+                key=lambda candidate: candidate[0],
+                reverse=True,
+            )[:_AP_MAX_DETECTIONS_PER_IMAGE]
+            predictions.extend(candidates)
+
+        predictions.sort(key=lambda candidate: candidate[0], reverse=True)
+        target_count = sum(len(targets) for targets in targets_by_image)
+        for iou_threshold in _AP_IOU_THRESHOLDS:
+            matched = [set() for _ in targets_by_image]
+            true_positives = np.zeros(len(predictions), dtype=np.float64)
+            false_positives = np.zeros(len(predictions), dtype=np.float64)
+            for prediction_index, (_, image_index, predicted_mask) in enumerate(predictions):
+                best_target_index = -1
+                best_iou = -1.0
+                for target_index, target_mask in enumerate(targets_by_image[image_index]):
+                    if target_index in matched[image_index]:
+                        continue
+                    if predicted_mask.shape != target_mask.shape:
+                        raise ValueError("Predicted and target instance masks must have equal shapes.")
+                    intersection = np.count_nonzero(predicted_mask & target_mask)
+                    union = np.count_nonzero(predicted_mask | target_mask)
+                    iou = float(intersection / union) if union else 0.0
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_target_index = target_index
+                if best_target_index >= 0 and best_iou >= iou_threshold:
+                    matched[image_index].add(best_target_index)
+                    true_positives[prediction_index] = 1.0
+                else:
+                    false_positives[prediction_index] = 1.0
+
+            if not predictions:
+                average_precision[(label_id, iou_threshold)] = 0.0
+                continue
+            cumulative_tp = np.cumsum(true_positives)
+            cumulative_fp = np.cumsum(false_positives)
+            recall = cumulative_tp / target_count
+            precision = cumulative_tp / np.maximum(cumulative_tp + cumulative_fp, 1.0)
+            precision = np.maximum.accumulate(precision[::-1])[::-1]
+            sampled_precision = np.zeros_like(_AP_RECALL_THRESHOLDS)
+            indices = np.searchsorted(recall, _AP_RECALL_THRESHOLDS, side="left")
+            valid = indices < precision.size
+            sampled_precision[valid] = precision[indices[valid]]
+            average_precision[(label_id, iou_threshold)] = float(np.mean(sampled_precision))
+
+    threshold_scores = {
+        threshold: float(np.mean([
+            average_precision[(label_id, threshold)] for label_id in labels_with_targets
+        ]))
+        for threshold in _AP_IOU_THRESHOLDS
+    }
+    return {
+        "val_mask_ap": float(np.mean(list(threshold_scores.values()))),
+        "val_mask_ap50": threshold_scores[0.5],
+        "val_mask_ap75": threshold_scores[0.75],
+    }
 
 
 @register_model
@@ -177,6 +346,181 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
         self.model_info.label_ids = sorted(label_mapping.database_to_model)
 
     @staticmethod
+    def _target_masks(
+        sample: Any, label_mapping: LabelMapping
+    ) -> dict[int, np.ndarray]:
+        """Union all owned instance pixels for each database label in one image."""
+        masks: dict[int, np.ndarray] = {}
+        for instance_id, model_label_id in sample.instance_id_to_semantic_id.items():
+            database_label_id = label_mapping.model_to_database[model_label_id]
+            instance_mask = sample.instance_mask == instance_id
+            if database_label_id in masks:
+                masks[database_label_id] |= instance_mask
+            else:
+                masks[database_label_id] = instance_mask.copy()
+        return masks
+
+    def _evaluate_validation(
+        self,
+        dataloader: DataLoader,
+        label_mapping: LabelMapping,
+        is_cancelled: Callable[[], bool],
+    ) -> dict[str, float]:
+        """Evaluate label-union masks using the same instance decoder as inference."""
+        if self._model is None or self._processor is None:
+            raise RuntimeError("Mask2Former model or processor failed to initialize.")
+
+        predicted_masks: list[dict[int, np.ndarray]] = []
+        target_masks: list[dict[int, np.ndarray]] = []
+        predicted_instances: list[list[dict[str, Any]]] = []
+        target_instances: list[list[dict[str, Any]]] = []
+        self._model.eval()
+        with torch.no_grad():
+            for samples in dataloader:
+                if is_cancelled():
+                    raise TrainingCancelled("Training cancellation was requested.")
+                inputs = self._processor(
+                    images=[sample.image for sample in samples], return_tensors="pt"
+                )
+                inputs = self._move_inputs_to_device(inputs, self._device())
+                outputs = self._model(**inputs)
+                processed_batch = self._processor.post_process_instance_segmentation(
+                    outputs,
+                    target_sizes=[sample.image.shape[:2] for sample in samples],
+                    threshold=_DEFAULT_INSTANCE_THRESHOLD,
+                )
+                ap_processed_batch = self._processor.post_process_instance_segmentation(
+                    outputs,
+                    target_sizes=[sample.image.shape[:2] for sample in samples],
+                    threshold=0.0,
+                    return_binary_maps=True,
+                )
+                for sample, processed, ap_processed in zip(
+                    samples, processed_batch, ap_processed_batch
+                ):
+                    predicted_masks.append(
+                        self._instance_masks_by_label(processed, label_mapping)
+                    )
+                    target_masks.append(self._target_masks(sample, label_mapping))
+                    predicted_instances.append(
+                        self._instances_from_processed(ap_processed, label_mapping)
+                    )
+                    target_instances.append(self._target_instances(sample, label_mapping))
+        return {
+            **compute_instance_ap_metrics(predicted_instances, target_instances),
+            **compute_mask_metrics(predicted_masks, target_masks),
+        }
+
+    @staticmethod
+    def _target_instances(
+        sample: Any, label_mapping: LabelMapping
+    ) -> list[dict[str, Any]]:
+        """Return each ground-truth mask separately for instance-level evaluation."""
+        return [
+            {
+                "label_id": label_mapping.model_to_database[model_label_id],
+                "mask": sample.instance_mask == instance_id,
+            }
+            for instance_id, model_label_id in sample.instance_id_to_semantic_id.items()
+        ]
+
+    @staticmethod
+    def _instances_from_processed(
+        processed: Mapping[str, Any], label_mapping: LabelMapping
+    ) -> list[dict[str, Any]]:
+        """Read separate scored instances from Mask2Former post-processing output."""
+        raw_segmentation = processed.get("segmentation")
+        if raw_segmentation is None:
+            return []
+        segmentation = (
+            raw_segmentation.detach().cpu().numpy()
+            if isinstance(raw_segmentation, torch.Tensor)
+            else np.asarray(raw_segmentation)
+        )
+        segments_info = processed.get("segments_info", [])
+        if not isinstance(segments_info, list):
+            raise RuntimeError("Mask2Former validation returned malformed segments.")
+        instances: list[dict[str, Any]] = []
+        for segment in segments_info:
+            try:
+                raw_model_label_id = segment["label_id"]
+                raw_segment_id = segment["id"]
+                score = float(segment["score"])
+                if (
+                    isinstance(raw_model_label_id, bool)
+                    or not isinstance(raw_model_label_id, (int, np.integer))
+                    or isinstance(raw_segment_id, bool)
+                    or not isinstance(raw_segment_id, (int, np.integer))
+                    or not math.isfinite(score)
+                ):
+                    raise TypeError("Segment IDs and scores have invalid types.")
+                database_label_id = label_mapping.model_to_database[int(raw_model_label_id)]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Mask2Former validation returned malformed segments."
+                ) from exc
+            segment_id = int(raw_segment_id)
+            if segmentation.ndim == 3:
+                if not 0 <= segment_id < segmentation.shape[0]:
+                    raise RuntimeError(
+                        "Mask2Former validation returned malformed segments."
+                    )
+                segment_mask = np.asarray(segmentation[segment_id], dtype=bool)
+            else:
+                segment_mask = segmentation == segment_id
+            if np.any(segment_mask):
+                instances.append({
+                    "label_id": database_label_id,
+                    "score": score,
+                    "mask": segment_mask,
+                })
+        return instances
+
+    @staticmethod
+    def _instance_masks_by_label(
+        processed: Mapping[str, Any], label_mapping: LabelMapping
+    ) -> dict[int, np.ndarray]:
+        """Union accepted instance pixels per database label, preserving background."""
+        raw_segmentation = processed.get("segmentation")
+        if raw_segmentation is None:
+            return {}
+        segmentation = (
+            raw_segmentation.detach().cpu().numpy()
+            if isinstance(raw_segmentation, torch.Tensor)
+            else np.asarray(raw_segmentation)
+        )
+        masks: dict[int, np.ndarray] = {}
+        segments_info = processed.get("segments_info", [])
+        if not isinstance(segments_info, list):
+            raise RuntimeError("Mask2Former validation returned malformed segments.")
+        for segment in segments_info:
+            try:
+                raw_model_label_id = segment["label_id"]
+                raw_segment_id = segment["id"]
+                if (
+                    isinstance(raw_model_label_id, bool)
+                    or not isinstance(raw_model_label_id, (int, np.integer))
+                    or isinstance(raw_segment_id, bool)
+                    or not isinstance(raw_segment_id, (int, np.integer))
+                ):
+                    raise TypeError("Segment and model class IDs must be integers.")
+                model_label_id = int(raw_model_label_id)
+                database_label_id = label_mapping.model_to_database[model_label_id]
+                segment_id = int(raw_segment_id)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Mask2Former validation returned malformed segments."
+                ) from exc
+            segment_mask = segmentation == segment_id
+            if not np.any(segment_mask):
+                continue
+            if database_label_id in masks:
+                masks[database_label_id] |= segment_mask
+            else:
+                masks[database_label_id] = segment_mask.copy()
+        return masks
+
+    @staticmethod
     def _move_inputs_to_device(inputs: dict[str, Any], device: torch.device) -> dict[str, Any]:
         """Move processor tensors, including per-image label lists, to ``device``."""
         moved: dict[str, Any] = {}
@@ -202,7 +546,7 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
             raise RuntimeError("Mask2Former model or processor failed to initialize.")
         params = params or {}
         try:
-            threshold = float(params.get("threshold", 0.5))
+            threshold = float(params.get("threshold", _DEFAULT_INSTANCE_THRESHOLD))
         except (TypeError, ValueError) as exc:
             raise ValueError("Instance segmentation threshold must be numeric.") from exc
         if not math.isfinite(threshold):
@@ -284,7 +628,13 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
         })
         mlflow.set_tag("label_ids", json.dumps(sorted(label_mapping.database_to_model)))
 
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=list)
+        train_indices, validation_indices = split_dataset_indices(len(dataset))
+        train_dataset = Subset(dataset, train_indices)
+        validation_dataset = Subset(dataset, validation_indices)
+        dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=list)
+        validation_dataloader = DataLoader(
+            validation_dataset, batch_size=batch_size, shuffle=False, collate_fn=list
+        )
         optimizer = torch.optim.AdamW(self._model.parameters(), lr=learning_rate)
         is_cancelled: Callable[[], bool] = kwargs.get("is_cancelled", lambda: False)
         progress_callback: Callable[[dict[str, int | float]], None] = kwargs.get(
@@ -292,6 +642,7 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
         )
         device = self._device()
         processed_batches = 0
+        final_progress: dict[str, int | float] = {}
         self._model.train()
         try:
             for epoch in range(1, epochs + 1):
@@ -325,12 +676,42 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
                     "loss": average_loss,
                     "epoch": epoch,
                     "processed_batches": processed_batches,
-                    "processed_samples": min(epoch * len(dataset), epochs * len(dataset)),
+                    "processed_samples": min(
+                        epoch * len(train_dataset), epochs * len(train_dataset)
+                    ),
                 }, step=epoch)
-                progress_callback({"epoch": epoch, "loss": average_loss, "processed_batches": processed_batches})
+                progress = {
+                    "epoch": epoch,
+                    "loss": average_loss,
+                    "processed_batches": processed_batches,
+                }
+                if epoch < epochs:
+                    progress_callback(progress)
+                else:
+                    final_progress = progress
                 logger.info("Mask2Former epoch %d/%d finished with loss %.6f.", epoch, epochs, average_loss)
             if processed_batches == 0:
                 raise RuntimeError("Mask2Former training processed zero batches.")
+            if validation_indices:
+                validation_metrics = self._evaluate_validation(
+                    validation_dataloader, label_mapping, is_cancelled
+                )
+                mlflow.log_metrics(validation_metrics, step=epochs)
+                final_progress.update({
+                    key: validation_metrics[key]
+                    for key in (
+                        "val_mask_ap",
+                        "val_mask_ap50",
+                        "val_mask_ap75",
+                        "val_mask_iou_macro",
+                        "val_mask_f1_macro",
+                        "val_mask_precision_macro",
+                        "val_mask_recall_macro",
+                    )
+                })
+            else:
+                mlflow.set_tag("validation_metrics_unavailable", "not_enough_images")
+            progress_callback(final_progress)
             self._has_fine_tuned_weights = True
         finally:
             self._model.eval()
