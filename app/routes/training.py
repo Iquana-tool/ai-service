@@ -35,6 +35,7 @@ router = APIRouter()
 async def start_training(
     request: InstanceSegmentationTrainingRequest,
     model_run_name: Optional[str] = Query(default=None, max_length=120),
+    dataset_name: Optional[str] = Query(default=None, max_length=200),
 ):
     """Start a training job asynchronously. Delegates to Celery workers.
 
@@ -42,12 +43,16 @@ async def start_training(
         request: Typed training configuration (labels, hyperparameters, etc.).
         model_run_name: Optional human-readable alias for this run stored as an
             MLflow tag.  Surfaced in the run-history UI as a display name.
+        dataset_name: Optional snapshot of the dataset's human-readable name.
     """
     validate_model(request)
     task_id = str(uuid4())
-    display_name = (model_run_name or "").strip() or (
+    raw_model_run_name = model_run_name if isinstance(model_run_name, str) else None
+    display_name = (raw_model_run_name or "").strip() or (
         f"train_{request.model_registry_key}_ds{request.dataset_id}"
     )
+    raw_dataset_name = dataset_name if isinstance(dataset_name, str) else None
+    training_dataset_name = (raw_dataset_name or "").strip() or None
     queued_at = time.time()
     start_deadline = queued_at + TRAINING_START_TIMEOUT_SECONDS
     run = create_training_run(
@@ -61,6 +66,7 @@ async def start_training(
             "run_name": display_name,
             "queued_at": queued_at,
             "start_deadline": start_deadline,
+            **({"dataset_name": training_dataset_name} if training_dataset_name else {}),
         },
     )
     try:
@@ -68,6 +74,7 @@ async def start_training(
             kwargs={
                 "request_dict": request.model_dump(),
                 "model_run_name": display_name,
+                "training_dataset_name": training_dataset_name,
                 "training_run_id": run.info.run_id,
             },
             task_id=task_id,

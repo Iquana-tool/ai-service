@@ -75,14 +75,20 @@ async def test_submit_creates_run_before_dispatch(
             )
 
     monkeypatch.setattr(training_routes, "train_and_register_model", DispatchProbe())
-    response = await training_routes.start_training(training_request, "  coral model  ")
+    response = await training_routes.start_training(
+        training_request,
+        "  coral model  ",
+        " Cells dataset ",
+    )
 
     assert response == {"task_id": observed["task_id"]}
     assert observed["kwargs"]["training_run_id"] == observed["run_id"]
     assert observed["kwargs"]["model_run_name"] == "coral model"
+    assert observed["kwargs"]["training_dataset_name"] == "Cells dataset"
     assert observed["tags"]["training_state"] == "starting"
     assert observed["tags"]["run_name"] == "coral model"
     assert observed["tags"]["selected_label_ids"] == "[7]"
+    assert observed["tags"]["dataset_name"] == "Cells dataset"
     assert observed["expires"] == training_routes.TRAINING_START_TIMEOUT_SECONDS
 
 
@@ -224,6 +230,7 @@ def _run_worker(
     task_id: str,
     registry: _FakeRegistry,
     retries: int = 0,
+    training_dataset_name: str | None = None,
 ):
     monkeypatch.setattr(training_tasks, "MLFlowModelRegistry", lambda _uri: registry)
     monkeypatch.setattr(
@@ -236,6 +243,7 @@ def _run_worker(
         return training_tasks.train_and_register_model.run(
             request_dict=request.model_dump(),
             model_run_name="trained coral model",
+            training_dataset_name=training_dataset_name,
             training_run_id=run_id,
         )
     finally:
@@ -256,6 +264,7 @@ def test_worker_resumes_run_and_publishes_unique_flat_model(
         run_id=run.info.run_id,
         task_id=task_id,
         registry=registry,
+        training_dataset_name="Cells dataset",
     )
 
     expected_key = f"trained-mask2former-ds11-{task_id}"
@@ -272,6 +281,9 @@ def test_worker_resumes_run_and_publishes_unique_flat_model(
         "user_id": "trainer",
         "training_task_id": task_id,
         "selected_label_ids": "[7]",
+        "trained_label_names": "[\"cell\"]",
+        "trained_on_dataset_id": "11",
+        "trained_on_dataset_name": "Cells dataset",
         "base_model_registry_key": "mask2former",
         "segmentation_mode": "flat",
         "trainable": "false",

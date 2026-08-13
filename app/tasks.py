@@ -37,6 +37,7 @@ def train_and_register_model(
     self,
     request_dict: dict,
     model_run_name: str | None = None,
+    training_dataset_name: str | None = None,
     training_run_id: str | None = None,
 ):
     """Generic training dispatcher. Loads the model from the registry and
@@ -45,6 +46,7 @@ def train_and_register_model(
     Args:
         request_dict: Serialised ``InstanceSegmentationTrainingRequest`` dict.
         model_run_name: Human-readable output model/run name.
+        training_dataset_name: Human-readable dataset name captured at submission.
         training_run_id: MLflow run created before Celery dispatch.
     """
     if not training_run_id:
@@ -79,7 +81,9 @@ def train_and_register_model(
         output_registry_key = _trained_model_registry_key(
             base_registry_key, request.dataset_id, self.request.id
         )
-        selected_label_ids = sorted(int(label.id) for label in request.labels)
+        selected_labels = sorted(request.labels, key=lambda label: int(label.id))
+        selected_label_ids = [int(label.id) for label in selected_labels]
+        selected_label_names = [str(label.name) for label in selected_labels]
         model.model_info = deepcopy(model.model_info)
         model.model_info.registry_key = output_registry_key
         model.model_info.name = (model_run_name or "").strip() or (
@@ -92,10 +96,14 @@ def train_and_register_model(
             "user_id": str(request.user_id),
             "training_task_id": str(self.request.id),
             "selected_label_ids": json.dumps(selected_label_ids),
+            "trained_label_names": json.dumps(selected_label_names, ensure_ascii=False),
+            "trained_on_dataset_id": str(request.dataset_id),
             "base_model_registry_key": base_registry_key,
             "segmentation_mode": "flat",
             "trainable": "false",
         })
+        if training_dataset_name:
+            model.model_info.tags["trained_on_dataset_name"] = training_dataset_name.strip()
         registry.register_model(model)
         terminate_training_run(
             training_run_id,
