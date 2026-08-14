@@ -18,6 +18,7 @@ from torchvision.transforms.functional import resize
 from transformers import Sam2Model, Sam2Processor
 
 from iquana_toolbox.schemas.database.contours import Contour
+from iquana_toolbox.schemas.input_contract import ConditioningSpec, InputContract
 from iquana_toolbox.schemas.model_info import PromptedSegmentationModelInfo
 from iquana_toolbox.schemas.prompts import Prompts
 from models.registry import register_model
@@ -131,6 +132,15 @@ class SAM2Prompted(PromptedSegmentation, CapabilityModel):
             trainable=False,
             prompt_types_supported=["point", "box", "polygon"],
             refinement_supported=True,
+            input_contracts=[
+                InputContract(
+                    task="prompted-segmentation",
+                    conditioning=ConditioningSpec(kind="none", unit="instance"),
+                    # SAM2 has no user-exposed inference tunables beyond the
+                    # geometric prompt itself.
+                    parameters=[],
+                ),
+            ],
         )
 
         self._load_weights()

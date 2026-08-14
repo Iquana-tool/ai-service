@@ -16,6 +16,7 @@ from transformers import Mask2FormerForUniversalSegmentation, Mask2FormerImagePr
 
 from models.registry import register_model
 from iquana_toolbox.schemas.database.contours import Contour
+from iquana_toolbox.schemas.input_contract import ConditioningSpec, InputContract
 from iquana_toolbox.schemas.model_info import HyperParameter, InstanceSegmentationModelInfo
 from iquana_toolbox.schemas.networking.http.services import InstanceSegmentationRequest
 from iquana_toolbox.schemas.training import InstanceSegmentationTrainingRequest
@@ -261,6 +262,20 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
             HyperParameter(
                 key="batch_size", label="Batch Size", default_value=2,
                 description="Batch size during training.", type="int", min_value=1, max_value=16, step=1,
+            ),
+        ],
+        input_contracts=[
+            InputContract(
+                task="instance-segmentation",
+                conditioning=ConditioningSpec(kind="none", unit="instance"),
+                parameters=[
+                    HyperParameter(
+                        key="score_threshold", label="Confidence threshold",
+                        type="float", default_value=0.5,
+                        min_value=0.0, max_value=1.0, step=0.05,
+                        description="Predictions below this confidence are discarded.",
+                    ),
+                ],
             ),
         ],
     )

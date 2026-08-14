@@ -24,8 +24,10 @@ import torch
 from transformers.models.sam3 import Sam3Model, Sam3Processor
 
 from iquana_toolbox.schemas.database.contours import Contour
+from iquana_toolbox.schemas.input_contract import ConditioningSpec, InputContract
 from iquana_toolbox.schemas.model_info import ModelInfo
 from iquana_toolbox.schemas.prompts import Prompts
+from iquana_toolbox.schemas.training import HyperParameter
 from models.registry import register_model
 
 from models import concat_ops
@@ -79,6 +81,73 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
         },
         status="ready",
         trainable=False,
+        input_contracts=[
+            InputContract(
+                task="instance-suggestion",
+                conditioning=ConditioningSpec(
+                    kind="instances", unit="instance",
+                    min_units=1, max_units=None,
+                    user_selectable_count=False,
+                ),
+                parameters=[
+                    HyperParameter(
+                        key="threshold", label="Detection sensitivity", type="float",
+                        default_value=0.3, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Sigmoid(class) × sigmoid(presence) cutoff. "
+                                    "Lower finds more; 0.3 is the HF-calibrated default.",
+                    ),
+                    HyperParameter(
+                        key="mask_threshold", label="Mask threshold", type="float",
+                        default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Binarization point for each kept instance's mask.",
+                    ),
+                ],
+            ),
+            InputContract(
+                task="cross-image-suggestion",
+                conditioning=ConditioningSpec(
+                    kind="reference_images", unit="image",
+                    min_units=1, max_units=1,
+                    requires_complete_annotation=True,
+                    user_selectable_count=False,
+                ),
+                parameters=[
+                    HyperParameter(
+                        key="threshold", label="Detection sensitivity", type="float",
+                        default_value=0.3, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Sigmoid(class) × sigmoid(presence) cutoff.",
+                    ),
+                    HyperParameter(
+                        key="mask_threshold", label="Mask threshold", type="float",
+                        default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Binarization point for each kept instance's mask.",
+                    ),
+                    HyperParameter(
+                        key="min_target_frac", label="Target overlap", type="float",
+                        default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Fraction of a detection that must sit on the target "
+                                    "image to be kept (canvas detections straddling the "
+                                    "seam are filtered by this).",
+                    ),
+                ],
+                notes="Concat workaround: the reference image is pasted beside the target, "
+                      "so only one fits before the target loses resolution.",
+            ),
+            InputContract(
+                task="prompted-segmentation",
+                conditioning=ConditioningSpec(kind="none", unit="instance"),
+                parameters=[
+                    HyperParameter(
+                        key="threshold", label="Detection sensitivity", type="float",
+                        default_value=0.3, min_value=0.0, max_value=1.0, step=0.05,
+                    ),
+                    HyperParameter(
+                        key="mask_threshold", label="Mask threshold", type="float",
+                        default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
+                    ),
+                ],
+            ),
+        ],
     )
 
     # Live HF objects can't be cloudpickled (transformers attaches ContextVar-backed

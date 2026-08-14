@@ -268,6 +268,17 @@ class CapabilityModel(BaseModel):
         if getattr(info, "trainable", False):
             info.tags["trainable"] = "true"
 
+        # Validate input contracts reference only tasks this model serves.
+        contracts = getattr(info, "input_contracts", None) or []
+        task_names = {t.name for t in tasks}
+        for contract in contracts:
+            if contract.task not in task_names:
+                logger.warning(
+                    "%s declares input_contract for task '%s' but does not serve it "
+                    "(supported: %s).  The contract will be ignored by consumers.",
+                    cls.__name__, contract.task, sorted(task_names),
+                )
+
     @classmethod
     def supported_tasks(cls) -> list[Task]:
         """The tasks this model serves, in mixin (MRO) order, de-duplicated."""
