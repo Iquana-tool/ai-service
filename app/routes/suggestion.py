@@ -25,7 +25,9 @@ async def infer_instances(request: InstanceSuggestionRequest):
     # predict(context, model_input=data, params), returning (masklets, scores).
     # The explicit task disambiguates suggestion from same-request-type tasks
     # (e.g. cross-image suggestion) on a multi-task model.
-    masklets, scores = model.predict([request], {"task": "instance-suggestion"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "instance-suggestion"
+    masklets, scores = model.predict([request], params)
     result = []
     for masklet, score in zip(masklets, scores):
         try:

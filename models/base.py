@@ -52,10 +52,12 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from iquana_toolbox.ai.base_classes import BaseModel
+from iquana_toolbox.schemas.input_contract import InputContract, get_contract_for_task
 from iquana_toolbox.schemas.networking.http.services import (
     BaseServiceRequest,
     CrossImageSuggestionRequest,
@@ -208,6 +210,95 @@ class Embedding(TaskCapability):
         raise NotImplementedError
 
 
+def validate_and_normalize_params(
+    contract: InputContract | None, params: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Validate and normalize inference parameters against an :class:`InputContract`.
+
+    - If *contract* is None, returns a shallow copy of *params*.
+    - Rejects unknown parameter keys (ignoring the routing key ``'task'``).
+    - Fills missing/None values with declared defaults.
+    - Validates type (bool, int, float, str).
+    - Validates options if declared.
+    - Validates min_value and max_value bounds.
+    - Coerces numbers to float for float parameters.
+    """
+    if contract is None:
+        return dict(params or {})
+
+    raw_params = dict(params or {})
+    declared_by_key = {param.key: param for param in contract.parameters}
+
+    # Reject unknown parameter keys (ignoring the routing key 'task')
+    for key in raw_params:
+        if key == "task":
+            continue
+        if key not in declared_by_key:
+            raise ValueError(
+                f"Unknown parameter '{key}' for task '{contract.task}'. "
+                f"Declared parameters: {sorted(declared_by_key.keys())}"
+            )
+
+    normalized: dict[str, Any] = {}
+    if "task" in raw_params:
+        normalized["task"] = raw_params["task"]
+
+    for key, spec in declared_by_key.items():
+        if key in raw_params and raw_params[key] is not None:
+            val = raw_params[key]
+        else:
+            val = spec.default_value
+
+        spec_type = spec.type
+
+        if spec_type == "bool":
+            if not isinstance(val, bool):
+                raise ValueError(
+                    f"Parameter '{key}' must be a bool, got {type(val).__name__} ({val!r})"
+                )
+            normalized_val = bool(val)
+        elif spec_type == "int":
+            if isinstance(val, bool) or not isinstance(val, int):
+                raise ValueError(
+                    f"Parameter '{key}' must be an int, got {type(val).__name__} ({val!r})"
+                )
+            normalized_val = int(val)
+        elif spec_type == "float":
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val):
+                raise ValueError(
+                    f"Parameter '{key}' must be a finite float, got {type(val).__name__} ({val!r})"
+                )
+            normalized_val = float(val)
+        elif spec_type == "str":
+            if not isinstance(val, str):
+                raise ValueError(
+                    f"Parameter '{key}' must be a str, got {type(val).__name__} ({val!r})"
+                )
+            normalized_val = str(val)
+        else:
+            raise ValueError(f"Unsupported parameter type '{spec_type}' for '{key}'")
+
+        if spec.options is not None:
+            if normalized_val not in spec.options:
+                raise ValueError(
+                    f"Parameter '{key}' value {normalized_val!r} is not in allowed options: {spec.options}"
+                )
+
+        if spec_type in {"int", "float"}:
+            if spec.min_value is not None and normalized_val < spec.min_value:
+                raise ValueError(
+                    f"Parameter '{key}' value {normalized_val} is less than min_value {spec.min_value}"
+                )
+            if spec.max_value is not None and normalized_val > spec.max_value:
+                raise ValueError(
+                    f"Parameter '{key}' value {normalized_val} is greater than max_value {spec.max_value}"
+                )
+
+        normalized[key] = normalized_val
+
+    return normalized
+
+
 # --------------------------------------------------------------------------- #
 # Dispatching base model
 # --------------------------------------------------------------------------- #
@@ -256,8 +347,20 @@ class CapabilityModel(BaseModel):
     def _stamp_task_tags(cls, info) -> None:
         """Write the task tags for this class's capabilities onto ``info.tags``."""
         tasks = cls.supported_tasks()
+        task_names = {t.name for t in tasks}
+
+        # Validate input contracts reference only tasks this model serves.
+        contracts = getattr(info, "input_contracts", None) or []
+        for contract in contracts:
+            if contract.task not in task_names:
+                raise ValueError(
+                    f"{cls.__name__} declares input_contract for task '{contract.task}' "
+                    f"but does not serve it (supported: {sorted(task_names)})."
+                )
+
         if not tasks:
             return
+
         # Primary task keeps the legacy single ``task`` tag: it selects the
         # ModelInfo subclass in parse_tags_to_model_info and satisfies any
         # consumer still filtering on ``task``.
@@ -267,17 +370,6 @@ class CapabilityModel(BaseModel):
             info.tags[task.tag_key] = "true"
         if getattr(info, "trainable", False):
             info.tags["trainable"] = "true"
-
-        # Validate input contracts reference only tasks this model serves.
-        contracts = getattr(info, "input_contracts", None) or []
-        task_names = {t.name for t in tasks}
-        for contract in contracts:
-            if contract.task not in task_names:
-                logger.warning(
-                    "%s declares input_contract for task '%s' but does not serve it "
-                    "(supported: %s).  The contract will be ignored by consumers.",
-                    cls.__name__, contract.task, sorted(task_names),
-                )
 
     @classmethod
     def supported_tasks(cls) -> list[Task]:
@@ -289,13 +381,23 @@ class CapabilityModel(BaseModel):
                 found.setdefault(task.name, task)
         return list(found.values())
 
+    def get_input_contract(self, task_name: str) -> InputContract | None:
+        """Return the declared InputContract for *task_name*, or None."""
+        info = getattr(self, "model_info", None)
+        if info is None:
+            return None
+        contracts = getattr(info, "input_contracts", None) or []
+        return get_contract_for_task(contracts, task_name)
+
     # -- MLflow entry point -------------------------------------------------- #
     def predict(self, context: Any, model_input, params: dict[str, Any] | None = None):
         params = dict(params or {})
         request = model_input[0] if isinstance(model_input, list) else model_input
         task = self._resolve_task(request, params)
+        contract = self.get_input_contract(task.name)
+        normalized_params = validate_and_normalize_params(contract, params)
         handler = getattr(self, task.handler)
-        return handler(request, params)
+        return handler(request, normalized_params)
 
     def _resolve_task(self, request, params: dict[str, Any]) -> Task:
         """Pick the task to serve this request.

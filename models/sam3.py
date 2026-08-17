@@ -135,7 +135,10 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
             ),
             InputContract(
                 task="prompted-segmentation",
-                conditioning=ConditioningSpec(kind="none", unit="instance"),
+                conditioning=ConditioningSpec(
+                    kind="none",
+                    user_selectable_count=False,
+                ),
                 parameters=[
                     HyperParameter(
                         key="threshold", label="Detection sensitivity", type="float",

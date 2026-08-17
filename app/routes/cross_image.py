@@ -22,10 +22,9 @@ session_router = APIRouter(prefix="/annotation_session", tags=["annotation_sessi
 async def suggest_cross_image(request: CrossImageSuggestionRequest):
     """Suggest instances of a concept on the target image from cross-image exemplars."""
     model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
-    # model is an MLflow PyFuncModel; predict(data) forwards to predict(context, model_input,
-    # params) -> (masks, scores) on the target image. The explicit task disambiguates this from
-    # same-image instance suggestion (both are suggestion-shaped) on the multi-task SAM 3.
-    masks, scores = model.predict([request], {"task": "cross-image-suggestion"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "cross-image-suggestion"
+    masks, scores = model.predict([request], params)
     result = []
     for mask, score in zip(masks, scores):
         try:

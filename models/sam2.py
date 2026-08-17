@@ -135,7 +135,10 @@ class SAM2Prompted(PromptedSegmentation, CapabilityModel):
             input_contracts=[
                 InputContract(
                     task="prompted-segmentation",
-                    conditioning=ConditioningSpec(kind="none", unit="instance"),
+                    conditioning=ConditioningSpec(
+                        kind="none",
+                        user_selectable_count=False,
+                    ),
                     # SAM2 has no user-exposed inference tunables beyond the
                     # geometric prompt itself.
                     parameters=[],

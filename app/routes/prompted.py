@@ -28,7 +28,9 @@ async def inference(request: PromptedSegmentationRequest):
     # Passing the task explicitly lets a multi-task model (e.g. SAM 3) dispatch to
     # its prompted handler unambiguously. Return all candidates so the backend can
     # pick the best one (e.g. discard a candidate that re-segments the parent).
-    contours = model.predict([request], {"task": "prompted-segmentation"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "prompted-segmentation"
+    contours = model.predict([request], params)
     return {
         "success": True,
         "message": f"Successfully performed prompted segmentation. Found {len(contours)} candidate(s).",

@@ -267,12 +267,19 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
         input_contracts=[
             InputContract(
                 task="instance-segmentation",
-                conditioning=ConditioningSpec(kind="none", unit="instance"),
+                conditioning=ConditioningSpec(
+                    kind="none",
+                    user_selectable_count=False,
+                ),
                 parameters=[
                     HyperParameter(
-                        key="score_threshold", label="Confidence threshold",
-                        type="float", default_value=0.5,
-                        min_value=0.0, max_value=1.0, step=0.05,
+                        key="threshold",
+                        label="Confidence threshold",
+                        type="float",
+                        default_value=0.5,
+                        min_value=0.0,
+                        max_value=1.0,
+                        step=0.05,
                         description="Predictions below this confidence are discarded.",
                     ),
                 ],
