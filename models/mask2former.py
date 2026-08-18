@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from transformers import Mask2FormerForUniversalSegmentation, Mask2FormerImageProcessor
 
-from iquana_service_core import register_model
+from models.registry import register_model
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.model_info import HyperParameter, InstanceSegmentationModelInfo
 from iquana_toolbox.schemas.networking.http.services import InstanceSegmentationRequest
