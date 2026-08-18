@@ -22,7 +22,7 @@ async def inference(request: PromptedSegmentationRequest):
         model_registry_key, prompts and an optional previous mask.
     :return: Segmentation result with the candidate contours.
     """
-    model = MODEL_REGISTRY.get_model_by_alias(request.model_registry_key, "latest")
+    model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
     # model is an MLflow PyFuncModel; predict(data) forwards to the model's
     # predict(context, model_input=data, params), which returns a list[Contour].
     # Passing the task explicitly lets a multi-task model (e.g. SAM 3) dispatch to

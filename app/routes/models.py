@@ -13,9 +13,6 @@ services used to serve:
   (registry_key/name/description/usage_tip). ``register_model`` stores the full
   ``ModelInfo.model_dump()`` as the logged model's metadata, which is the lossless
   source of truth -- the same approach the backend gateway uses.
-
-To be upstreamed into service-core in Phase 1; kept local for now so the shared
-repo stays untouched mid-migration.
 """
 from logging import getLogger
 from typing import Tuple
@@ -54,7 +51,7 @@ def _full_model_info(registry_key: str) -> dict:
     and cheap. Falls back to a minimal stub if an older artifact lacks metadata.
     """
     try:
-        info = mlflow.models.get_model_info(f"models:/{registry_key}@latest")
+        info = mlflow.models.get_model_info(f"models:/{registry_key}/latest")
         if info.metadata:
             return info.metadata
         logger.warning("Model '%s' has no artifact metadata; returning stub.", registry_key)
@@ -108,7 +105,7 @@ def build_task_model_routers(
     @session_router.get("/models/{model_registry_key}/preload", tags=["models"])
     async def preload_model(model_registry_key: str, user_id: str):
         """Warm a model into the registry cache at the start of a session."""
-        registry.get_model_by_alias(model_registry_key, "latest")
+        registry.get_model_by_version(model_registry_key, "latest")
         return {
             "success": True,
             "message": f"Preloaded model '{model_registry_key}'.",

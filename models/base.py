@@ -265,6 +265,8 @@ class CapabilityModel(BaseModel):
         info.tags["tasks"] = ",".join(t.name for t in tasks)
         for task in tasks:
             info.tags[task.tag_key] = "true"
+        if getattr(info, "trainable", False):
+            info.tags["trainable"] = "true"
 
     @classmethod
     def supported_tasks(cls) -> list[Task]:
