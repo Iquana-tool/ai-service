@@ -15,7 +15,7 @@ Notes
 -----
 * DINOv3 weights are **gated** on the HuggingFace Hub. The hosting process must be
   logged in (``huggingface-cli login`` / ``HF_TOKEN``) and have accepted the model
-  terms. In the IQUANA services this is handled by ``create_service_app(hf_login=True)``.
+  terms. The unified service handles this through its application lifespan.
 * DINOv3 ships under Meta's own *DINOv3 License* (not Apache-2.0), which carries
   commercial-use restrictions. Fine for research; check the terms before commercial use.
 """

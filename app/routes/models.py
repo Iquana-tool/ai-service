@@ -13,9 +13,6 @@ services used to serve:
   (registry_key/name/description/usage_tip). ``register_model`` stores the full
   ``ModelInfo.model_dump()`` as the logged model's metadata, which is the lossless
   source of truth -- the same approach the backend gateway uses.
-
-To be upstreamed into service-core in Phase 1; kept local for now so the shared
-repo stays untouched mid-migration.
 """
 from logging import getLogger
 from typing import Tuple
