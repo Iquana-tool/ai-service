@@ -1,7 +1,7 @@
 """Task-filtered model-registry routes for the unified service.
 
-This supersedes ``iquana_service_core.routers.models.build_model_routers`` for
-the merged service in two ways:
+Two things it does differently from the naive per-task listing the single-task
+services used to serve:
 
 * It filters by the *filter-safe per-task* tag (``task_<name>`` == "true") rather
   than the legacy single ``task`` tag, so a model that advertises several tasks
