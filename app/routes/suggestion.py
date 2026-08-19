@@ -6,7 +6,7 @@ Ported from the former instance-discovery-service. The session router keeps its
 """
 from logging import getLogger
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.http.services import InstanceSuggestionRequest
 
@@ -27,7 +27,10 @@ async def infer_instances(request: InstanceSuggestionRequest):
     # (e.g. cross-image suggestion) on a multi-task model.
     params = dict(request.parameters) if getattr(request, "parameters", None) else {}
     params["task"] = "instance-suggestion"
-    masklets, scores = model.predict([request], params)
+    try:
+        masklets, scores = model.predict([request], params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     result = []
     for masklet, score in zip(masklets, scores):
         try:

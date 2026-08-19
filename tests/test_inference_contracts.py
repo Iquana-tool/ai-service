@@ -20,6 +20,7 @@ from iquana_toolbox.schemas.networking.http.services import (
     BaseServiceRequest,
     CrossImageExemplar,
     CrossImageSuggestionRequest,
+    EmbedRequest,
     InstanceSegmentationRequest,
     InstanceSuggestionRequest,
     PromptedSegmentationRequest,
@@ -394,6 +395,112 @@ async def test_cross_image_route_returns_422_for_invalid_conditioning(monkeypatc
 
     assert exc_info.value.status_code == 422
     assert "requires at least 1 image" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_instance_seg_routes_return_422_for_contract_validation_failure(monkeypatch):
+    from fastapi import HTTPException
+    from app.routes.instance_seg import inference, run_inference
+
+    model = MagicMock()
+    model.predict.side_effect = ValueError("Task 'instance-segmentation' requires threshold in [0.0, 1.0]")
+    monkeypatch.setattr(
+        "app.routes.instance_seg.MODEL_REGISTRY.get_model_by_version",
+        lambda *_args: model,
+    )
+    monkeypatch.setattr("app.routes.instance_seg.validate_model", lambda req: None)
+
+    request = InstanceSegmentationRequest(
+        image_url="http://example.com/img.png",
+        user_id="test-user",
+        model_registry_key="m2f",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await inference(request)
+    assert exc_info.value.status_code == 422
+    assert "requires threshold in [0.0, 1.0]" in exc_info.value.detail
+
+    with pytest.raises(HTTPException) as exc_info_run:
+        await run_inference(request)
+    assert exc_info_run.value.status_code == 422
+    assert "requires threshold in [0.0, 1.0]" in exc_info_run.value.detail
+
+
+@pytest.mark.asyncio
+async def test_prompted_seg_route_returns_422_for_contract_validation_failure(monkeypatch):
+    from fastapi import HTTPException
+    from app.routes.prompted import inference as prompted_inference
+
+    model = MagicMock()
+    model.predict.side_effect = ValueError("Unknown parameter 'invalid_param'")
+    monkeypatch.setattr(
+        "app.routes.prompted.MODEL_REGISTRY.get_model_by_version",
+        lambda *_args: model,
+    )
+
+    request = PromptedSegmentationRequest(
+        image_url="http://example.com/img.png",
+        user_id="test-user",
+        model_registry_key="sam3",
+        prompts=Prompts(points=[], boxes=[]),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prompted_inference(request)
+    assert exc_info.value.status_code == 422
+    assert "Unknown parameter 'invalid_param'" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_instance_suggestion_route_returns_422_for_empty_exemplars(monkeypatch):
+    from fastapi import HTTPException
+    from app.routes.suggestion import infer_instances
+
+    model = MagicMock()
+    model.predict.side_effect = ValueError(
+        "Task 'instance-suggestion' requires at least 1 instance conditioning unit(s), but request supplied 0."
+    )
+    monkeypatch.setattr(
+        "app.routes.suggestion.MODEL_REGISTRY.get_model_by_version",
+        lambda *_args: model,
+    )
+
+    request = InstanceSuggestionRequest(
+        image_url="http://example.com/img.png",
+        user_id="test-user",
+        model_registry_key="sam3",
+        positive_exemplars=[],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await infer_instances(request)
+    assert exc_info.value.status_code == 422
+    assert "requires at least 1 instance" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_embed_route_returns_422_for_contract_validation_failure(monkeypatch):
+    from fastapi import HTTPException
+    from app.routes.embed import inference as embed_inference
+
+    model = MagicMock()
+    model.predict.side_effect = ValueError("Task 'embed' invalid kind")
+    monkeypatch.setattr(
+        "app.routes.embed.MODEL_REGISTRY.get_model_by_version",
+        lambda *_args: model,
+    )
+
+    request = EmbedRequest(
+        image_url="http://example.com/img.png",
+        user_id="test-user",
+        model_registry_key="dinov3",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await embed_inference(request)
+    assert exc_info.value.status_code == 422
+    assert "invalid kind" in exc_info.value.detail
 
 
 def test_conditioning_cardinality_counts_model_usable_units():

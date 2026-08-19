@@ -5,7 +5,7 @@ unchanged; only the model registry is now the shared one.
 """
 from logging import getLogger
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.networking.http.services import PromptedSegmentationRequest
 
 from app.state import MODEL_REGISTRY
@@ -30,7 +30,10 @@ async def inference(request: PromptedSegmentationRequest):
     # pick the best one (e.g. discard a candidate that re-segments the parent).
     params = dict(request.parameters) if getattr(request, "parameters", None) else {}
     params["task"] = "prompted-segmentation"
-    contours = model.predict([request], params)
+    try:
+        contours = model.predict([request], params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     return {
         "success": True,
         "message": f"Successfully performed prompted segmentation. Found {len(contours)} candidate(s).",
