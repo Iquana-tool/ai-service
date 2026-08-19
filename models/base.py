@@ -299,6 +299,47 @@ def validate_and_normalize_params(
     return normalized
 
 
+def _conditioning_unit_count(request: BaseServiceRequest, kind: str) -> int:
+    """Count model-usable conditioning units for a request."""
+    if kind == "instances":
+        return len(getattr(request, "positive_exemplars", ()) or ())
+    if kind == "reference_images":
+        exemplars = getattr(request, "exemplars", ()) or ()
+        return len({exemplar.image_url for exemplar in exemplars})
+    if kind == "embeddings":
+        return len(getattr(request, "embeddings", {}) or {})
+    return 0
+
+
+def validate_request_conditioning(
+    contract: InputContract | None, request: BaseServiceRequest
+) -> None:
+    """Validate request conditioning against the selected task contract.
+
+    Contracts that declare no cardinality (``none``/``concept_text``) are
+    intentionally left alone. Missing request fields also count as empty, which
+    keeps optional ``min_units=0`` contracts valid across request types.
+    """
+    if contract is None:
+        return
+
+    conditioning = contract.conditioning
+    if conditioning.kind not in {"instances", "reference_images", "embeddings"}:
+        return
+
+    actual = _conditioning_unit_count(request, conditioning.kind)
+    if actual < conditioning.min_units:
+        raise ValueError(
+            f"Task '{contract.task}' requires at least {conditioning.min_units} "
+            f"{conditioning.unit} conditioning unit(s), but request supplied {actual}."
+        )
+    if conditioning.max_units is not None and actual > conditioning.max_units:
+        raise ValueError(
+            f"Task '{contract.task}' accepts at most {conditioning.max_units} "
+            f"{conditioning.unit} conditioning unit(s), but request supplied {actual}."
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Dispatching base model
 # --------------------------------------------------------------------------- #
@@ -395,6 +436,7 @@ class CapabilityModel(BaseModel):
         request = model_input[0] if isinstance(model_input, list) else model_input
         task = self._resolve_task(request, params)
         contract = self.get_input_contract(task.name)
+        validate_request_conditioning(contract, request)
         normalized_params = validate_and_normalize_params(contract, params)
         handler = getattr(self, task.handler)
         return handler(request, normalized_params)

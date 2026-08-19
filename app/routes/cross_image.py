@@ -7,7 +7,7 @@ the backend accepts as contours.
 """
 from logging import getLogger
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.http.services import CrossImageSuggestionRequest
 
@@ -24,7 +24,10 @@ async def suggest_cross_image(request: CrossImageSuggestionRequest):
     model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
     params = dict(request.parameters) if getattr(request, "parameters", None) else {}
     params["task"] = "cross-image-suggestion"
-    masks, scores = model.predict([request], params)
+    try:
+        masks, scores = model.predict([request], params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     result = []
     for mask, score in zip(masks, scores):
         try:

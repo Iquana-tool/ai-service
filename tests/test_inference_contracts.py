@@ -29,9 +29,11 @@ from iquana_toolbox.schemas.training import HyperParameter
 
 from models.base import (
     CapabilityModel,
+    CrossImageSuggestion,
     TaskCapability,
     register_task,
     validate_and_normalize_params,
+    validate_request_conditioning,
 )
 from models.mask2former import Mask2Former
 from models.mask2former_dataset import LabelMapping
@@ -319,6 +321,115 @@ def test_capability_model_predict_normalizes_parameters():
     # Out-of-bounds param -> error before handler
     with pytest.raises(ValueError, match="greater than max_value"):
         model.predict(None, req, {"task": "dummy-infer", "threshold": 1.5})
+
+
+def test_conditioning_cardinality_rejects_required_empty_and_accepts_optional_empty(monkeypatch):
+    """Conditioning cardinality is enforced before handlers, including min_units=0."""
+    monkeypatch.setattr(SAM3, "_load_model", lambda self: None)
+    sam3 = SAM3()
+    handler = MagicMock()
+    monkeypatch.setattr(SAM3, "suggest_cross_image", handler)
+    empty_request = CrossImageSuggestionRequest(
+        image_url="http://example.com/img.png",
+        user_id="test-user",
+        model_registry_key="sam3",
+    )
+
+    with pytest.raises(ValueError, match=r"requires at least 1 image"):
+        sam3.predict(None, empty_request, {"task": "cross-image-suggestion"})
+    handler.assert_not_called()
+
+    class OptionalCrossImageModel(CrossImageSuggestion, CapabilityModel):
+        model_info = ModelInfo(
+            registry_key="optional-cross-image",
+            name="Optional Cross Image",
+            description="desc",
+            usage_tip="tip",
+            status="ready",
+            input_contracts=[
+                InputContract(
+                    task="cross-image-suggestion",
+                    conditioning=ConditioningSpec(
+                        kind="reference_images",
+                        unit="image",
+                        min_units=0,
+                        max_units=1,
+                        user_selectable_count=False,
+                    ),
+                ),
+            ],
+        )
+
+        def suggest_cross_image(self, request, params):
+            return {"handled": True}
+
+    optional_model = OptionalCrossImageModel()
+    assert optional_model.predict(
+        None, empty_request, {"task": "cross-image-suggestion"}
+    ) == {"handled": True}
+
+
+@pytest.mark.asyncio
+async def test_cross_image_route_returns_422_for_invalid_conditioning(monkeypatch):
+    from fastapi import HTTPException
+    from app.routes.cross_image import suggest_cross_image
+
+    model = MagicMock()
+    model.predict.side_effect = ValueError(
+        "Task 'cross-image-suggestion' requires at least 1 image conditioning unit(s), "
+        "but request supplied 0."
+    )
+    monkeypatch.setattr(
+        "app.routes.cross_image.MODEL_REGISTRY.get_model_by_version",
+        lambda *_args: model,
+    )
+    request = CrossImageSuggestionRequest(
+        image_url="http://example.com/img.png",
+        user_id="test-user",
+        model_registry_key="sam3",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await suggest_cross_image(request)
+
+    assert exc_info.value.status_code == 422
+    assert "requires at least 1 image" in exc_info.value.detail
+
+
+def test_conditioning_cardinality_counts_model_usable_units():
+    instance_contract = InputContract(
+        task="instance-segmentation",
+        conditioning=ConditioningSpec(
+            kind="instances", unit="instance", min_units=1, user_selectable_count=False
+        ),
+    )
+    ids_only = InstanceSegmentationRequest(
+        image_url="http://example.com/target.png",
+        user_id="test-user",
+        model_registry_key="conditioned-model",
+        contour_ids=[123],
+    )
+    with pytest.raises(ValueError, match=r"requires at least 1 instance"):
+        validate_request_conditioning(instance_contract, ids_only)
+
+    mask = BinaryMask.from_numpy_array(np.ones((4, 4), dtype=bool))
+    duplicate_source = CrossImageSuggestionRequest(
+        image_url="http://example.com/target.png",
+        user_id="test-user",
+        model_registry_key="reference-model",
+        exemplars=[
+            CrossImageExemplar(image_url="http://example.com/reference.png", mask=mask),
+            CrossImageExemplar(image_url="http://example.com/reference.png", mask=mask),
+        ],
+    )
+    reference_contract = InputContract(
+        task="cross-image-suggestion",
+        conditioning=ConditioningSpec(
+            kind="reference_images", unit="image", min_units=2, user_selectable_count=False
+        ),
+    )
+    with pytest.raises(ValueError, match=r"requires at least 2 image"):
+        validate_request_conditioning(reference_contract, duplicate_source)
 
 
 # --------------------------------------------------------------------------- #
