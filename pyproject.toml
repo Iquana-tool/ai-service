@@ -61,7 +61,7 @@ geco = { git = "https://github.com/robertleist/GeCo.git" }
 # backend, which is why it stays torch-free). It is now the only consumer-side
 # pin, so a local path source is free to use when toolbox needs local edits:
 # iquana-toolbox = { path = "../iquana-toolbox", editable = true }
-iquana-toolbox = { git = "https://github.com/Iquana-tool/iquana-toolbox.git" }
+iquana-toolbox = { git = "https://github.com/shivamtawari/iquana-toolbox.git", rev = "ffe891d7a2e9260400654d777f34e44ba4b745bf" }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
