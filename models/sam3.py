@@ -61,11 +61,7 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
             "Instance suggestion: provide one or more positive exemplar masks; an optional "
             "concept label guides text-prompted detection. Prompted segmentation: provide a "
             "box (or a polygon/points, whose bounding box is used) to segment one object. "
-            "Cross-image: only the top-ranked exemplar is used -- the concat workaround pastes "
-            "its whole source image beside the target, so a second one would halve the "
-            "target's resolution. "
-            "Tune `threshold` (detection sensitivity, default 0.3 -- lower finds more) and "
-            "`mask_threshold` per request via params."
+            "Cross-image: provide reference image exemplars for cross-image concept transfer."
         ),
         tags={
             "status": "ready",
@@ -73,7 +69,6 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
             "finetunable": "true",
             "domain": "general",
             "publisher": "meta-ai",
-            "threshold": "0.3",
             # Prompted-surface descriptors (stored as tags because a single model
             # serves several tasks; a per-task ModelInfo is a Phase-1 toolbox item).
             "prompt_types_supported": "['box', 'polygon', 'point']",
@@ -318,14 +313,9 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
         and we keep only the detections that land mostly on the target region, cropped back to
         target coordinates. Returns ``(masks, scores)`` like instance suggestion.
 
-        **Only the best-ranked exemplar is used**, however many the caller sent. The request's
-        unit is the instance, but this handler's unit is the *image*: each exemplar drags its
-        whole source image onto the canvas, and the processor then resizes that canvas to a
-        fixed input, so a second exemplar image halves what is left of the target -- fatal when
-        the instances are small. That is a limit of the concat workaround, not of the task; a
-        genuine in-context method consumes the instances themselves and would use all of them.
-        Dropping the rest here rather than asking the caller for one keeps the task's contract
-        model-agnostic (see the cross-image orchestration in the backend).
+        The supplied reference images and all of their exemplar masks are composited onto the canvas
+        and mapped to positive bounding-box visual prompts. Cardinality (e.g. ``max_units=1, unit="image"``)
+        is declared via the model's InputContract and enforced gateway-side.
 
         The composite halves effective resolution and introduces a positional seam -- the known
         limits of the concat trick; ``min_target_frac`` (params) tunes how strictly a detection
@@ -336,20 +326,32 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
         mask_threshold = params.get("mask_threshold", self.mask_threshold)
         min_target_frac = params.get("min_target_frac", 0.5)
 
-        exemplars = request.exemplars[:1]
-        if len(request.exemplars) > 1:
-            logger.info(
-                "SAM3 cross-image: using the top exemplar of %d (one concatenated image).",
-                len(request.exemplars),
-            )
+        # Group exemplar masks by source image
+        unique_images: list[np.ndarray] = []
+        masks_by_image_idx: list[list[np.ndarray]] = []
+        image_url_to_idx: dict[str, int] = {}
+
+        for ex in request.exemplars:
+            url = getattr(ex, "image_url", None)
+            if url is not None and url in image_url_to_idx:
+                idx = image_url_to_idx[url]
+                masks_by_image_idx[idx].append(ex.exemplar_mask)
+            else:
+                idx = len(unique_images)
+                if url is not None:
+                    image_url_to_idx[url] = idx
+                unique_images.append(ex.image)
+                masks_by_image_idx.append([ex.exemplar_mask])
 
         target = request.image
-        exemplar_images = [exemplar.image for exemplar in exemplars]
-        exemplar_masks = [exemplar.exemplar_mask for exemplar in exemplars]
+        plan = concat_ops.plan_layout(target.shape[:2], [im.shape[:2] for im in unique_images])
+        canvas = concat_ops.composite_image(target, unique_images, plan)
 
-        plan = concat_ops.plan_layout(target.shape[:2], [im.shape[:2] for im in exemplar_images])
-        canvas = concat_ops.composite_image(target, exemplar_images, plan)
-        boxes = concat_ops.exemplar_boxes_on_canvas(exemplar_masks, plan)
+        boxes: list[list[float]] = []
+        for img_idx, (_, (x_off, y_off, _, _)) in enumerate(zip(unique_images, plan.exemplar_xywh)):
+            for mask in masks_by_image_idx[img_idx]:
+                y0, y1, x0, x1 = concat_ops.mask_bbox(mask)
+                boxes.append([float(x0 + x_off), float(y0 + y_off), float(x1 + x_off), float(y1 + y_off)])
 
         inputs = self.processor(
             images=[canvas],

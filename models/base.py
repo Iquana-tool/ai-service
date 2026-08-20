@@ -307,6 +307,9 @@ def _conditioning_unit_count(request: BaseServiceRequest, kind: str) -> int:
         exemplars = getattr(request, "exemplars", ()) or ()
         return len({exemplar.image_url for exemplar in exemplars})
     if kind == "embeddings":
+        exemplar_embeddings = getattr(request, "exemplar_embeddings", {}) or {}
+        if exemplar_embeddings:
+            return max((len(vecs) for vecs in exemplar_embeddings.values()), default=0)
         return len(getattr(request, "embeddings", {}) or {})
     return 0
 

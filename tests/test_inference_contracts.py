@@ -719,6 +719,87 @@ def test_sam3_handler_forwarding(monkeypatch):
     assert extract_mock.call_args[1]["min_target_frac"] == 0.5
 
 
+def test_sam3_multiple_exemplars_same_reference_image(monkeypatch):
+    """Test that SAM 3 composites a single reference image once but generates prompt boxes for all its exemplar masks."""
+    monkeypatch.setattr(SAM3, "_load_model", lambda self: None)
+    monkeypatch.setattr(
+        "iquana_toolbox.schemas.networking.http.services.get_image_from_url_cached",
+        lambda url: np.zeros((64, 64, 3), dtype=np.uint8),
+    )
+    extract_mock = MagicMock(return_value=([np.zeros((64, 64), dtype=np.uint8)], [0]))
+    monkeypatch.setattr("models.sam3.concat_ops.extract_target_masks", extract_mock)
+
+    sam3 = SAM3()
+    sam3.processor = MagicMock()
+    sam3.model = MagicMock()
+
+    mock_inputs = MagicMock()
+    mock_inputs.get.return_value = torch.tensor([[128, 64]])
+    sam3.processor.return_value = mock_inputs
+    sam3.processor.post_process_instance_segmentation.return_value = [
+        {"masks": torch.zeros((1, 64, 64)), "scores": torch.tensor([0.9])}
+    ]
+
+    mask1 = BinaryMask.from_numpy_array(np.ones((10, 10), dtype=bool))
+    mask2 = BinaryMask.from_numpy_array(np.ones((15, 15), dtype=bool))
+
+    # Two exemplars from the same reference image URL
+    req_cross_multi = CrossImageSuggestionRequest(
+        image_url="http://example.com/target.png",
+        user_id="user1",
+        model_registry_key="sam3",
+        exemplars=[
+            CrossImageExemplar(image_url="http://example.com/ref.png", mask=mask1),
+            CrossImageExemplar(image_url="http://example.com/ref.png", mask=mask2),
+        ],
+    )
+
+    sam3.predict(None, req_cross_multi, {"task": "cross-image-suggestion"})
+
+    # Check processor call
+    _, proc_kwargs = sam3.processor.call_args
+    # There should be 2 input boxes corresponding to the 2 exemplar masks
+    assert len(proc_kwargs["input_boxes"][0]) == 2
+    # All boxes should have label 1 (positive prompt)
+    assert proc_kwargs["input_boxes_labels"].tolist() == [[1, 1]]
+
+
+def test_validate_request_conditioning_in_context_embeddings_min_units():
+    """Validates that exemplar_embeddings vector count is validated against min_units."""
+    from models.base import validate_request_conditioning
+
+    contract = InputContract(
+        task="cross-image-suggestion",
+        conditioning=ConditioningSpec(
+            kind="embeddings",
+            unit="vector",
+            min_units=2,
+            max_units=5,
+            embedding_kinds=["region_mean"],
+        ),
+        parameters=[],
+    )
+
+    # 1 vector supplied -> should fail min_units=2
+    req_1_vec = CrossImageSuggestionRequest(
+        image_url="http://example.com/test.png",
+        user_id="user1",
+        model_registry_key="emb-model",
+        exemplar_embeddings={"region_mean": [[0.1, 0.2]]},
+    )
+    with pytest.raises(ValueError, match="requires at least 2 vector conditioning unit"):
+        validate_request_conditioning(contract, req_1_vec)
+
+    # 2 vectors supplied -> should succeed
+    req_2_vec = CrossImageSuggestionRequest(
+        image_url="http://example.com/test.png",
+        user_id="user1",
+        model_registry_key="emb-model",
+        exemplar_embeddings={"region_mean": [[0.1, 0.2], [0.3, 0.4]]},
+    )
+    validate_request_conditioning(contract, req_2_vec)
+
+
 def test_mask2former_handler_forwarding(monkeypatch):
     """Test that predict() on Mask2Former validates and forwards normalized threshold to segment_instances."""
     monkeypatch.setattr(
