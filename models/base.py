@@ -264,11 +264,20 @@ def validate_and_normalize_params(
                 )
             normalized_val = int(val)
         elif spec_type == "float":
-            if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val):
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
                 raise ValueError(
                     f"Parameter '{key}' must be a finite float, got {type(val).__name__} ({val!r})"
                 )
-            normalized_val = float(val)
+            try:
+                normalized_val = float(val)
+            except (OverflowError, ValueError) as exc:
+                raise ValueError(
+                    f"Parameter '{key}' must be a finite float, got {type(val).__name__} ({val!r})"
+                ) from exc
+            if not math.isfinite(normalized_val):
+                raise ValueError(
+                    f"Parameter '{key}' must be a finite float, got {type(val).__name__} ({val!r})"
+                )
         elif spec_type == "str":
             if not isinstance(val, str):
                 raise ValueError(
@@ -299,7 +308,11 @@ def validate_and_normalize_params(
     return normalized
 
 
-def _conditioning_unit_count(request: BaseServiceRequest, kind: str) -> int:
+def _conditioning_unit_count(
+    request: BaseServiceRequest,
+    kind: str,
+    required_embedding_kinds: list[str] | None = None,
+) -> int:
     """Count model-usable conditioning units for a request."""
     if kind == "instances":
         return len(getattr(request, "positive_exemplars", ()) or ())
@@ -309,8 +322,16 @@ def _conditioning_unit_count(request: BaseServiceRequest, kind: str) -> int:
     if kind == "embeddings":
         exemplar_embeddings = getattr(request, "exemplar_embeddings", {}) or {}
         if exemplar_embeddings:
+            if required_embedding_kinds:
+                return min(
+                    len(exemplar_embeddings.get(embedding_kind, ()))
+                    for embedding_kind in required_embedding_kinds
+                )
             return max((len(vecs) for vecs in exemplar_embeddings.values()), default=0)
-        return len(getattr(request, "embeddings", {}) or {})
+        embeddings = getattr(request, "embeddings", {}) or {}
+        if required_embedding_kinds:
+            return sum(embedding_kind in embeddings for embedding_kind in required_embedding_kinds)
+        return len(embeddings)
     return 0
 
 
@@ -330,7 +351,27 @@ def validate_request_conditioning(
     if conditioning.kind not in {"instances", "reference_images", "embeddings"}:
         return
 
-    actual = _conditioning_unit_count(request, conditioning.kind)
+    if conditioning.kind == "embeddings":
+        exemplar_embeddings = getattr(request, "exemplar_embeddings", {}) or {}
+        embeddings = getattr(request, "embeddings", {}) or {}
+        supplied_embeddings = exemplar_embeddings if exemplar_embeddings else embeddings
+        supplied_kinds = set(supplied_embeddings)
+        missing_kinds = [
+            kind for kind in conditioning.embedding_kinds if kind not in supplied_kinds
+        ]
+        if missing_kinds:
+            raise ValueError(
+                f"Task '{contract.task}' requires embedding kind(s) {sorted(missing_kinds)}, "
+                f"but request supplied {sorted(supplied_kinds)}."
+            )
+
+    actual = _conditioning_unit_count(
+        request,
+        conditioning.kind,
+        required_embedding_kinds=(
+            conditioning.embedding_kinds if conditioning.kind == "embeddings" else None
+        ),
+    )
     if actual < conditioning.min_units:
         raise ValueError(
             f"Task '{contract.task}' requires at least {conditioning.min_units} "

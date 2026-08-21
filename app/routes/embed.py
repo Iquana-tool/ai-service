@@ -29,8 +29,10 @@ async def inference(request: EmbedRequest):
     # model is an MLflow PyFuncModel; predict(data) forwards to the model's
     # predict(context, model_input=data, params) -> list[EmbeddingVector]. The explicit task
     # lets a multi-task model dispatch to its embed handler unambiguously.
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "embed"
     try:
-        vectors = model.predict([request], {"task": "embed"})
+        vectors = model.predict([request], params)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     return {

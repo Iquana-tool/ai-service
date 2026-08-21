@@ -150,6 +150,8 @@ def test_validate_and_normalize_params_type_checks():
         validate_and_normalize_params(contract, {"rate": True})
     with pytest.raises(ValueError, match="must be a finite float"):
         validate_and_normalize_params(contract, {"rate": float("nan")})
+    with pytest.raises(ValueError, match="must be a finite float"):
+        validate_and_normalize_params(contract, {"rate": 10**1000})
 
     # Str rejects int
     with pytest.raises(ValueError, match="must be a str"):
@@ -503,6 +505,36 @@ async def test_embed_route_returns_422_for_contract_validation_failure(monkeypat
     assert "invalid kind" in exc_info.value.detail
 
 
+@pytest.mark.asyncio
+async def test_embed_route_forwards_parameters_and_overrides_task(monkeypatch):
+    from app.routes.embed import inference as embed_inference
+
+    captured = {}
+
+    class MockModel:
+        def predict(self, data, params=None):
+            captured["data"] = data
+            captured["params"] = params
+            return []
+
+    monkeypatch.setattr(
+        "app.routes.embed.MODEL_REGISTRY.get_model_by_version",
+        lambda *_args: MockModel(),
+    )
+    request = EmbedRequest(
+        image_url="http://example.com/img.png",
+        user_id="test-user",
+        model_registry_key="dinov3",
+        parameters={"task": "hacked_task", "threshold": 0.4},
+    )
+
+    response = await embed_inference(request)
+
+    assert response["success"] is True
+    assert captured["data"] == [request]
+    assert captured["params"] == {"task": "embed", "threshold": 0.4}
+
+
 def test_conditioning_cardinality_counts_model_usable_units():
     instance_contract = InputContract(
         task="instance-segmentation",
@@ -790,6 +822,19 @@ def test_validate_request_conditioning_in_context_embeddings_min_units():
     with pytest.raises(ValueError, match="requires at least 2 vector conditioning unit"):
         validate_request_conditioning(contract, req_1_vec)
 
+    # Unrelated image vectors must not satisfy the required region_mean cardinality.
+    req_1_region_2_image = CrossImageSuggestionRequest(
+        image_url="http://example.com/test.png",
+        user_id="user1",
+        model_registry_key="emb-model",
+        exemplar_embeddings={
+            "region_mean": [[0.1, 0.2]],
+            "image_cls": [[0.3, 0.4], [0.5, 0.6]],
+        },
+    )
+    with pytest.raises(ValueError, match="requires at least 2 vector conditioning unit"):
+        validate_request_conditioning(contract, req_1_region_2_image)
+
     # 2 vectors supplied -> should succeed
     req_2_vec = CrossImageSuggestionRequest(
         image_url="http://example.com/test.png",
@@ -798,6 +843,46 @@ def test_validate_request_conditioning_in_context_embeddings_min_units():
         exemplar_embeddings={"region_mean": [[0.1, 0.2], [0.3, 0.4]]},
     )
     validate_request_conditioning(contract, req_2_vec)
+
+
+def test_validate_request_conditioning_requires_declared_embedding_kinds():
+    contract = InputContract(
+        task="cross-image-suggestion",
+        conditioning=ConditioningSpec(
+            kind="embeddings",
+            unit="vector",
+            min_units=1,
+            max_units=2,
+            embedding_kinds=["region_mean"],
+        ),
+        parameters=[],
+    )
+
+    flat_image_only = CrossImageSuggestionRequest(
+        image_url="http://example.com/test.png",
+        user_id="user1",
+        model_registry_key="emb-model",
+        embeddings={"image_cls": [0.1, 0.2]},
+    )
+    with pytest.raises(ValueError, match=r"requires embedding kind.*region_mean"):
+        validate_request_conditioning(contract, flat_image_only)
+
+    grouped_image_only = CrossImageSuggestionRequest(
+        image_url="http://example.com/test.png",
+        user_id="user1",
+        model_registry_key="emb-model",
+        exemplar_embeddings={"image_cls": [[0.1, 0.2]]},
+    )
+    with pytest.raises(ValueError, match=r"requires embedding kind.*region_mean"):
+        validate_request_conditioning(contract, grouped_image_only)
+
+    flat_region = CrossImageSuggestionRequest(
+        image_url="http://example.com/test.png",
+        user_id="user1",
+        model_registry_key="emb-model",
+        embeddings={"region_mean": [0.1, 0.2]},
+    )
+    validate_request_conditioning(contract, flat_region)
 
 
 def test_mask2former_handler_forwarding(monkeypatch):
