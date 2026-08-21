@@ -7,7 +7,7 @@ stored embeddings, never re-embedding on the annotation hot path.
 """
 from logging import getLogger
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.networking.http.services import EmbedRequest
 
 from app.state import MODEL_REGISTRY
@@ -29,7 +29,12 @@ async def inference(request: EmbedRequest):
     # model is an MLflow PyFuncModel; predict(data) forwards to the model's
     # predict(context, model_input=data, params) -> list[EmbeddingVector]. The explicit task
     # lets a multi-task model dispatch to its embed handler unambiguously.
-    vectors = model.predict([request], {"task": "embed"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "embed"
+    try:
+        vectors = model.predict([request], params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     return {
         "success": True,
         "message": f"Computed {len(vectors)} embedding(s) for user {request.user_id}.",

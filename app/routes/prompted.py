@@ -5,7 +5,7 @@ unchanged; only the model registry is now the shared one.
 """
 from logging import getLogger
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.networking.http.services import PromptedSegmentationRequest
 
 from app.state import MODEL_REGISTRY
@@ -28,7 +28,12 @@ async def inference(request: PromptedSegmentationRequest):
     # Passing the task explicitly lets a multi-task model (e.g. SAM 3) dispatch to
     # its prompted handler unambiguously. Return all candidates so the backend can
     # pick the best one (e.g. discard a candidate that re-segments the parent).
-    contours = model.predict([request], {"task": "prompted-segmentation"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "prompted-segmentation"
+    try:
+        contours = model.predict([request], params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     return {
         "success": True,
         "message": f"Successfully performed prompted segmentation. Found {len(contours)} candidate(s).",

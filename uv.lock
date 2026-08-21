@@ -1730,7 +1730,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.3.0" },
     { name = "hydra-core", specifier = ">=1.3.2" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=7.3.0" },
-    { name = "iquana-toolbox", git = "https://github.com/Iquana-tool/iquana-toolbox.git" },
+    { name = "iquana-toolbox", git = "https://github.com/Iquana-tool/iquana-toolbox.git?rev=425a08aaed1f23a7f98aa0680eb7ae2d7af40a21" },
     { name = "mlflow", specifier = ">=2.10.0" },
     { name = "numpy", specifier = ">=2.3.3" },
     { name = "omegaconf", specifier = ">=2.3.0" },
@@ -1763,7 +1763,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "iquana-toolbox"
 version = "0.1.0"
-source = { git = "https://github.com/Iquana-tool/iquana-toolbox.git#bb26d0b7ee5a57fcc7592f29a77b9048e614059a" }
+source = { git = "https://github.com/Iquana-tool/iquana-toolbox.git?rev=425a08aaed1f23a7f98aa0680eb7ae2d7af40a21#425a08aaed1f23a7f98aa0680eb7ae2d7af40a21" }
 dependencies = [
     { name = "cachetools" },
     { name = "mlflow" },

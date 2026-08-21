@@ -3,7 +3,7 @@
 Ported from the former instance-segmentation-service. Inference plus the
 annotation-session ``/run`` variant that returns the gateway envelope.
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.http.services import InstanceSegmentationRequest
 
@@ -19,7 +19,12 @@ async def inference(request: InstanceSegmentationRequest) -> list[Contour]:
     """Load a model from the MLflow registry and run instance segmentation."""
     validate_model(request)
     model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
-    return model.predict(request, {"task": "instance-segmentation"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "instance-segmentation"
+    try:
+        return model.predict(request, params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
 
 @session_router.post("/run")
@@ -31,7 +36,12 @@ async def run_inference(request: InstanceSegmentationRequest):
     """
     validate_model(request)
     model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
-    contours = model.predict(request, {"task": "instance-segmentation"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "instance-segmentation"
+    try:
+        contours = model.predict(request, params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     return {
         "success": True,
         "message": f"Detected {len(contours)} instances for user {request.user_id}",
