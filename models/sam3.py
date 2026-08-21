@@ -88,13 +88,14 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
                     HyperParameter(
                         key="threshold", label="Detection sensitivity", type="float",
                         default_value=0.3, min_value=0.0, max_value=1.0, step=0.05,
-                        description="Sigmoid(class) × sigmoid(presence) cutoff. "
-                                    "Lower finds more; 0.3 is the HF-calibrated default.",
+                        description="Lower values find more objects. "
+                                    "Higher values keep only the clearest ones.",
                     ),
                     HyperParameter(
                         key="mask_threshold", label="Mask threshold", type="float",
                         default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
-                        description="Binarization point for each kept instance's mask.",
+                        description="Lower values include more pixels. "
+                                    "Higher values keep only the most certain pixels.",
                     ),
                 ],
             ),
@@ -110,19 +111,20 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
                     HyperParameter(
                         key="threshold", label="Detection sensitivity", type="float",
                         default_value=0.3, min_value=0.0, max_value=1.0, step=0.05,
-                        description="Sigmoid(class) × sigmoid(presence) cutoff.",
+                        description="Lower values find more objects. "
+                                    "Higher values keep only the clearest ones.",
                     ),
                     HyperParameter(
                         key="mask_threshold", label="Mask threshold", type="float",
                         default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
-                        description="Binarization point for each kept instance's mask.",
+                        description="Lower values include more pixels. "
+                                    "Higher values keep only the most certain pixels.",
                     ),
                     HyperParameter(
                         key="min_target_frac", label="Target overlap", type="float",
                         default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
-                        description="Fraction of a detection that must sit on the target "
-                                    "image to be kept (canvas detections straddling the "
-                                    "seam are filtered by this).",
+                        description="How much of a detected object must be on the target image. "
+                                    "Higher values reject objects near the reference image.",
                     ),
                 ],
                 notes="Concat workaround: the reference image is pasted beside the target, "
@@ -138,10 +140,14 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
                     HyperParameter(
                         key="threshold", label="Detection sensitivity", type="float",
                         default_value=0.3, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Lower values find more objects. "
+                                    "Higher values keep only the clearest ones.",
                     ),
                     HyperParameter(
                         key="mask_threshold", label="Mask threshold", type="float",
                         default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Lower values include more pixels. "
+                                    "Higher values keep only the most certain pixels.",
                     ),
                 ],
             ),
