@@ -24,7 +24,7 @@ from iquana_toolbox.schemas.prompts import Prompts
 from models.registry import register_model
 
 from models.base import CapabilityModel, PromptedSegmentation
-from paths import HUGGINGFACE_TOKEN
+from paths import hf_token
 
 logger = getLogger(__name__)
 
@@ -150,8 +150,11 @@ class SAM2Prompted(PromptedSegmentation, CapabilityModel):
 
     def _load_weights(self) -> None:
         """(Re)build the HF processor + model from the checkpoint on ``self.device``."""
-        self.processor = Sam2Processor.from_pretrained(self.checkpoint, token=HUGGINGFACE_TOKEN)
-        self.model = Sam2Model.from_pretrained(self.checkpoint, token=HUGGINGFACE_TOKEN).to(self.device)
+        # Read now rather than at import, so a token pushed in after the service
+        # started is used by the next load instead of only after a restart.
+        token = hf_token()
+        self.processor = Sam2Processor.from_pretrained(self.checkpoint, token=token)
+        self.model = Sam2Model.from_pretrained(self.checkpoint, token=token).to(self.device)
 
     def load_context(self, context: Any) -> None:
         """Runs once when MLflow loads the model; rebuild the HF objects fresh."""
