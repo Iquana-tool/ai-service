@@ -28,7 +28,7 @@ from models.registry import register_model
 from models import embedding_ops as ops
 from models.backbones.dinov3 import DEFAULT_DINOV3_MODEL, DINOv3Backbone
 from models.base import CapabilityModel, Embedding
-from paths import HF_ACCESS_TOKEN
+from paths import hf_token
 
 logger = getLogger(__name__)
 
@@ -94,7 +94,7 @@ class DINOv3Embedder(Embedding, CapabilityModel):
         self.backbone = DINOv3Backbone(
             model_id=self.model_id,
             image_size=self.image_size,
-            token=HF_ACCESS_TOKEN,
+            token=hf_token(),
             device=self._device,
         )
 

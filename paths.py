@@ -32,10 +32,22 @@ ALLOWED_ORIGINS = getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 TRAINING_START_TIMEOUT_SECONDS = int(getenv("TRAINING_START_TIMEOUT_SECONDS", "900"))
 
 # HuggingFace. Empty/blank -> None so transformers does an anonymous request
-# instead of sending an illegal "Authorization: Bearer " header. Both names are
-# exposed because the ported models import them under different aliases.
+# instead of sending an illegal "Authorization: Bearer " header.
+#
+# Read through hf_token() at the moment weights are fetched, not captured at
+# import: the backend's admin page can push a new token into this process
+# (see app/routes/config.py), and a module-level constant bound at import would
+# leave every already-imported model holding the token the service started with.
+#
+# The two constants stay for compatibility with anything still importing them,
+# and are the value as it stood at startup.
 HF_ACCESS_TOKEN = getenv("HF_ACCESS_TOKEN") or None
 HUGGINGFACE_TOKEN = HF_ACCESS_TOKEN
+
+
+def hf_token() -> str | None:
+    """The Hugging Face token to download weights with, or None for anonymous."""
+    return (os.environ.get("HF_ACCESS_TOKEN") or "").strip() or None
 
 # Weights (instance-suggestion / DINO encoders).
 WEIGHTS = os.path.join(ROOT, "weights")

@@ -23,6 +23,7 @@ from typing import Sequence
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.lifespan import build_lifespan
+from app.routes.config import build_config_router
 from app.routes.health import build_health_router
 from app.routes.models import build_task_model_routers
 from app.state import MODEL_REGISTRY
@@ -113,6 +114,9 @@ def create_app() -> FastAPI:
 
     # Service-level liveness at the root (used by the start script / monitoring).
     app.include_router(build_health_router())
+    # Credentials pushed in from the backend's admin page. Root only: it
+    # configures the process, not any one task surface.
+    app.include_router(build_config_router())
 
     # Each task gets the full shared surface (health + model registry routes)
     # plus its own inference routers, all under its prefix.

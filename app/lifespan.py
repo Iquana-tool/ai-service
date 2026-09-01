@@ -85,6 +85,17 @@ def _hf_login() -> None:
         logger.warning("HuggingFace login failed: %s", e)
 
 
+def refresh_hf_login() -> None:
+    """Re-authenticate to HuggingFace after the token changed at runtime.
+
+    The startup login is what most of ``huggingface_hub`` reads, so setting
+    ``HF_ACCESS_TOKEN`` alone would leave the hub session still holding whatever
+    the service booted with. Called by ``PATCH /config`` when a new token is
+    pushed in from the backend's admin page.
+    """
+    _hf_login()
+
+
 def _hf_logout() -> None:
     try:
         from huggingface_hub import logout
