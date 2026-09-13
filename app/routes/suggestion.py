@@ -6,7 +6,7 @@ Ported from the former instance-discovery-service. The session router keeps its
 """
 from logging import getLogger
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.http.services import InstanceSuggestionRequest
 
@@ -20,12 +20,17 @@ session_router = APIRouter(prefix="/annotation_session", tags=["annotation_sessi
 @session_router.post("/run")
 async def infer_instances(request: InstanceSuggestionRequest):
     """Infer instances from seed instances."""
-    model = MODEL_REGISTRY.get_model_by_alias(request.model_registry_key, "latest")
+    model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
     # model is an MLflow PyFuncModel; predict(data) forwards to the model's
     # predict(context, model_input=data, params), returning (masklets, scores).
     # The explicit task disambiguates suggestion from same-request-type tasks
     # (e.g. cross-image suggestion) on a multi-task model.
-    masklets, scores = model.predict([request], {"task": "instance-suggestion"})
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "instance-suggestion"
+    try:
+        masklets, scores = model.predict([request], params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     result = []
     for masklet, score in zip(masklets, scores):
         try:

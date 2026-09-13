@@ -1,5 +1,6 @@
 .idea/
 mlruns/
+mlflow.db
 logs/
 
 # Byte-compiled / optimized / DLL files

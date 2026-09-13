@@ -7,7 +7,7 @@ the backend accepts as contours.
 """
 from logging import getLogger
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.http.services import CrossImageSuggestionRequest
 
@@ -21,11 +21,13 @@ session_router = APIRouter(prefix="/annotation_session", tags=["annotation_sessi
 @session_router.post("/run")
 async def suggest_cross_image(request: CrossImageSuggestionRequest):
     """Suggest instances of a concept on the target image from cross-image exemplars."""
-    model = MODEL_REGISTRY.get_model_by_alias(request.model_registry_key, "latest")
-    # model is an MLflow PyFuncModel; predict(data) forwards to predict(context, model_input,
-    # params) -> (masks, scores) on the target image. The explicit task disambiguates this from
-    # same-image instance suggestion (both are suggestion-shaped) on the multi-task SAM 3.
-    masks, scores = model.predict([request], {"task": "cross-image-suggestion"})
+    model = MODEL_REGISTRY.get_model_by_version(request.model_registry_key, "latest")
+    params = dict(request.parameters) if getattr(request, "parameters", None) else {}
+    params["task"] = "cross-image-suggestion"
+    try:
+        masks, scores = model.predict([request], params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     result = []
     for mask, score in zip(masks, scores):
         try:
