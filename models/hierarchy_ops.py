@@ -38,17 +38,6 @@ class FocusCrop:
         return np.asarray(mask)[y0:y1, x0:x1]
 
 
-def fit_to_image(mask: np.ndarray, image_hw: tuple[int, int]) -> np.ndarray:
-    """Boolean ``mask`` at ``image_hw``, nearest-neighbour rescaled if it was rasterised at
-    another size (e.g. a caller holding stale image dimensions)."""
-    m = np.asarray(mask).astype(bool)
-    if m.shape[:2] == tuple(image_hw):
-        return m
-    resized = cv2.resize(m.astype(np.uint8), (int(image_hw[1]), int(image_hw[0])),
-                         interpolation=cv2.INTER_NEAREST)
-    return resized.astype(bool)
-
-
 def containment(mask: np.ndarray, region: np.ndarray) -> float:
     """Fraction of ``mask``'s foreground that lies inside ``region`` (0 for an empty mask)."""
     m = np.asarray(mask).astype(bool)
@@ -105,30 +94,6 @@ def bbox_xyxy(mask: np.ndarray, x_off: int = 0, y_off: int = 0) -> list[float] |
         return None
     y0, y1, x0, x1 = mask_bbox(m)
     return [float(x0 + x_off), float(y0 + y_off), float(x1 + x_off), float(y1 + y_off)]
-
-
-def suppress_overlaps(
-    masks: list[np.ndarray], scores, max_overlap: float = 0.5
-) -> list[int]:
-    """Greedy mask NMS: indices of detections kept, highest score first.
-
-    SAM 3 returns overlapping duplicates of one object; left in, the backend's hierarchy
-    fitting would clip the later one against the earlier into a sliver. A detection is dropped
-    when more than ``max_overlap`` of the *smaller* of it and a kept detection is shared --
-    so a small duplicate inside a larger one goes too, not only near-identical pairs.
-    """
-    flat = [np.asarray(m).astype(bool).ravel() for m in masks]
-    areas = [int(f.sum()) for f in flat]
-    kept: list[int] = []
-    for i in np.argsort(-np.asarray(scores, dtype=float), kind="stable"):
-        if areas[i] == 0:
-            continue
-        if all(
-            int(np.logical_and(flat[i], flat[k]).sum()) <= max_overlap * min(areas[i], areas[k])
-            for k in kept
-        ):
-            kept.append(int(i))
-    return kept
 
 
 def paste_back(
