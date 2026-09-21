@@ -37,7 +37,7 @@ from models.base import (
     InstanceSuggestion,
     PromptedSegmentation,
 )
-from paths import HF_ACCESS_TOKEN
+from paths import hf_token
 
 logger = getLogger(__name__)
 
@@ -155,7 +155,8 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
     )
 
     # Live HF objects can't be cloudpickled (transformers attaches ContextVar-backed
-    # forward hooks). They are stripped from the pickle and rebuilt in ``load_context``.
+    # forward hooks). They are stripped from the pickle and rebuilt on first use;
+    # declaring them here is what tells the base this model has weights to load.
     _unpicklable_attrs = ("model", "processor")
 
     # SAM 3 scores are sigmoid(class) * sigmoid(presence) -- a product of two
@@ -167,16 +168,18 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
         # Binarization point for each kept instance's mask. Note: 0.0 marks the whole
         # frame as foreground -- raise toward 0.5 for tight per-instance masks.
         self.mask_threshold = mask_threshold
-        self._load_model()
 
-    def _load_model(self):
-        """Load the (pretrained) SAM 3 weights from the Hub. Reused on first init and
-        when MLflow rebuilds the model in ``load_context`` after unpickling."""
-        self.processor = Sam3Processor.from_pretrained("facebook/sam3", token=HF_ACCESS_TOKEN)
-        self.model = Sam3Model.from_pretrained("facebook/sam3", token=HF_ACCESS_TOKEN).to(self.device)
+    def _load_weights(self):
+        """Load the (pretrained) SAM 3 weights from the Hub.
 
-    def load_context(self, context):
-        self._load_model()
+        Called on first use and again after MLflow unpickles the model in a
+        worker. ``facebook/sam3`` is a *gated* repo, so the token is read here
+        rather than at import: a token pushed in through the admin page reaches
+        the next load instead of only surviving a restart.
+        """
+        token = hf_token()
+        self.processor = Sam3Processor.from_pretrained("facebook/sam3", token=token)
+        self.model = Sam3Model.from_pretrained("facebook/sam3", token=token).to(self.device)
 
     # -- capability handler: instance suggestion ---------------------------- #
     def suggest_instances(

@@ -71,7 +71,7 @@ class DINOv3Embedder(Embedding, CapabilityModel):
     )
 
     # The live backbone (torch + HF objects) can't be cloudpickled when MLflow logs the model;
-    # it is stripped from the pickle and rebuilt in ``load_context`` from the stored config.
+    # it is stripped from the pickle and rebuilt from the stored config on first use.
     _unpicklable_attrs = ("backbone",)
 
     def __init__(
@@ -87,19 +87,15 @@ class DINOv3Embedder(Embedding, CapabilityModel):
         # context (matches foveate's exemplar cropping).
         self.pad_frac = pad_frac
         self._device = None if device == "auto" else device
-        self._load_backbone()
 
-    def _load_backbone(self):
-        """(Re)build the frozen backbone. Runs on first init and when MLflow reloads the model."""
+    def _load_weights(self):
+        """(Re)build the frozen backbone. Runs on first use and after MLflow reloads the model."""
         self.backbone = DINOv3Backbone(
             model_id=self.model_id,
             image_size=self.image_size,
             token=hf_token(),
             device=self._device,
         )
-
-    def load_context(self, context):
-        self._load_backbone()
 
     # -- capability handler: embed ------------------------------------------ #
     def embed(self, request: EmbedRequest, params: dict[str, Any] | None = None) -> list[EmbeddingVector]:

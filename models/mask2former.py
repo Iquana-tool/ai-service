@@ -304,8 +304,8 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
 
         ``BaseModel.__getstate__`` intentionally removes the processor and Torch
         module because Transformers objects are not safely cloudpickleable.  They
-        must still exist as ``None`` placeholders so ``load_context`` can lazily
-        reconstruct them in a fresh API or Celery process.
+        must still exist as ``None`` placeholders so the base's lazy loader sees
+        them as absent and rebuilds them in a fresh API or Celery process.
         """
         super().__setstate__(state)
         self._processor = None
@@ -327,7 +327,9 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
                 self._label_mapping = LabelMapping.from_dict(json.load(mapping_stream))
             self.model_info.label_ids = sorted(self._label_mapping.database_to_model)
             self._has_fine_tuned_weights = True
-        self._load_weights()
+        # Only now: _load_weights prefers ``_artifact_path`` over the base
+        # checkpoint, so the artifacts have to be unpacked before it runs.
+        super().load_context(context)
 
     def _device(self) -> torch.device:
         """Return the execution device used consistently for training and inference."""
@@ -563,7 +565,6 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
             raise RuntimeError(
                 "Mask2Former inference requires a persisted database label mapping."
             )
-        self._load_weights()
         if self._model is None or self._processor is None:
             raise RuntimeError("Mask2Former model or processor failed to initialize.")
         params = params or {}

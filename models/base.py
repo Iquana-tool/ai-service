@@ -18,8 +18,15 @@ Adding a model
     class MyModel(PromptedSegmentation, CapabilityModel):
         model_info = PromptedSegmentationModelInfo(registry_key="mymodel", ...)
 
-        def load_context(self, context): ...
+        _unpicklable_attrs = ("model", "processor")
+
+        def _load_weights(self): ...
         def segment_prompted(self, request, params) -> list[Contour]: ...
+
+``__init__`` declares what the model *is* (its ``model_info``, its checkpoint id,
+its device) and nothing more; the weights themselves are built by
+``_load_weights`` on first use. Keep ``__init__`` cheap -- every model in the
+catalog is constructed on every service start just to be registered.
 
 Adding a *multi-task* model
 ---------------------------
@@ -474,6 +481,43 @@ class CapabilityModel(BaseModel):
         contracts = getattr(info, "input_contracts", None) or []
         return get_contract_for_task(contracts, task_name)
 
+    # -- lazy weight loading ------------------------------------------------- #
+    def _load_weights(self) -> None:
+        """Build this model's live objects (HF model, processor, backbone, ...).
+
+        Override in any model that holds weights. It is called on first use and
+        again whenever the live objects are missing -- never from ``__init__``, so
+        constructing a model stays cheap. The default does nothing, which is
+        already correct for a model with no heavy state.
+        """
+
+    def _ensure_weights(self) -> None:
+        """Load the weights unless they are already in place.
+
+        Presence is read off ``_unpicklable_attrs`` -- the live objects a model
+        declares as unpickleable. Those are exactly the attributes MLflow's
+        cloudpickling strips, so they are absent both on a freshly constructed
+        instance and on one just unpickled in a worker, and present once loaded.
+        Reusing that declaration keeps this self-healing: there is no separate
+        "loaded" flag that could survive a pickle round-trip and lie about a
+        model whose weights went with it.
+        """
+        if all(getattr(self, attr, None) is not None for attr in self._unpicklable_attrs):
+            return
+        logger.debug("Loading weights for %s", type(self).__name__)
+        self._load_weights()
+
+    def load_context(self, context: Any) -> None:
+        """MLflow's load hook: materialize the weights as the model is loaded.
+
+        This is what keeps ``GET /{task}/models/{key}/preload`` meaningful -- it
+        pays the load cost up front so the first real request does not. A model
+        that needs to read its own artifacts (fine-tuned weights, a label mapping)
+        overrides this and calls ``super().load_context(context)`` once the state
+        ``_load_weights`` depends on is in place.
+        """
+        self._ensure_weights()
+
     # -- MLflow entry point -------------------------------------------------- #
     def predict(self, context: Any, model_input, params: dict[str, Any] | None = None):
         params = dict(params or {})
@@ -482,6 +526,10 @@ class CapabilityModel(BaseModel):
         contract = self.get_input_contract(task.name)
         validate_request_conditioning(contract, request)
         normalized_params = validate_and_normalize_params(contract, params)
+        # After validation, so a request that is going to be rejected never pays
+        # for a weight load, and before dispatch, so every handler can assume its
+        # weights exist without each one guarding for itself.
+        self._ensure_weights()
         handler = getattr(self, task.handler)
         return handler(request, normalized_params)
 
