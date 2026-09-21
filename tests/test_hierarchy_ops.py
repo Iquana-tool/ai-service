@@ -67,6 +67,26 @@ def test_paste_back_clips_filters_and_places():
     assert np.array_equal(masks[1], _rect((100, 100), 20, 25, 32, 38))  # clipped to the parent
 
 
+def test_suppress_overlaps_keeps_best_of_duplicates():
+    hw = (40, 40)
+    big = _rect(hw, 0, 20, 0, 20)
+    dup = _rect(hw, 2, 20, 2, 20)          # near-identical to big, lower score
+    inner = _rect(hw, 5, 10, 5, 10)        # small one entirely inside big
+    apart = _rect(hw, 25, 35, 25, 35)
+    touching = _rect(hw, 15, 25, 15, 25)   # shares 25/100 px with big -> kept
+    kept = ho.suppress_overlaps([dup, big, inner, apart, touching], [0.5, 0.9, 0.4, 0.3, 0.2])
+    assert kept == [1, 3, 4]
+
+
+def test_fit_to_image_rescales_masks_rasterised_at_other_size():
+    small = _rect((15, 20), 5, 10, 10, 20)  # e.g. rasterised at stale thumbnail dimensions
+    fitted = ho.fit_to_image(small, (30, 40))
+    assert fitted.shape == (30, 40) and fitted.dtype == bool
+    assert np.array_equal(fitted, _rect((30, 40), 10, 20, 20, 40))
+    same = _rect((30, 40), 1, 2, 3, 4)
+    assert ho.fit_to_image(same, (30, 40)) is not None and np.array_equal(ho.fit_to_image(same, (30, 40)), same)
+
+
 # -- dispatch (SAM 3 stubbed) -------------------------------------------------- #
 torch = pytest.importorskip("torch")
 from models.sam3_hierarchical import SAM3Hierarchical  # noqa: E402
@@ -155,3 +175,20 @@ def test_model_advertises_instance_suggestion_only():
     tasks = [t.name for t in SAM3Hierarchical.supported_tasks()]
     assert tasks == ["instance-suggestion"]
     assert SAM3Hierarchical.model_info.registry_key == "sam3_hierarchical"
+
+
+def test_masks_at_stale_dimensions_are_rescaled_to_the_image():
+    # Backend rasterised exemplar + parent at half size (stale DB width/height).
+    hw, half = (200, 200), (100, 100)
+    parent = _rect(half, 50, 80, 50, 80)
+    polyp = _rect(half, 60, 65, 60, 65)
+
+    model = _StubSAM3()
+    masks, _ = model.suggest_instances(
+        _request(np.zeros((*hw, 3), np.uint8), [polyp], [parent]), {"crop_padding": 0.0}
+    )
+    (call,) = model.calls
+    # Crop is the parent at full resolution (100..160), not the top-left corner.
+    assert call.shape == (60, 60)
+    assert call.boxes == [[20.0, 20.0, 30.0, 30.0]]
+    assert np.array_equal(masks[0].astype(bool), _rect(hw, 102, 106, 102, 106))
