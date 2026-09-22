@@ -5,8 +5,8 @@ Ported from the former prompted-seg-service. Changes from the original:
     the old task-specific ``predict`` becomes the ``segment_prompted`` handler.
   * the hand-written ``__getstate__`` is replaced by declaring
     ``_unpicklable_attrs`` -- the toolbox ``BaseModel`` drops those on pickling and
-    ``load_context`` rebuilds them, which is the same transformers-upgrade-proof
-    behaviour with less code.
+    the base's lazy loader rebuilds them on first use, which is the same
+    transformers-upgrade-proof behaviour with less code.
 """
 from logging import getLogger
 from typing import Any
@@ -105,7 +105,9 @@ class SAM2Prompted(PromptedSegmentation, CapabilityModel):
     # Live HF objects bake the installed transformers' module layout into the
     # cloudpickle artifact, so a later upgrade can break the unpickled object
     # (e.g. the ``num_pos_feats`` -> ``num_position_features`` rename). They are
-    # dropped on pickling and rebuilt from the Hub in ``load_context``.
+    # dropped on pickling and rebuilt from the Hub on first use. Declaring them
+    # here is also what tells ``CapabilityModel._ensure_weights`` this model has
+    # weights to load at all.
     _unpicklable_attrs = ("model", "processor")
 
     def __init__(self, registry_key: str, device: str = "auto"):
@@ -146,8 +148,6 @@ class SAM2Prompted(PromptedSegmentation, CapabilityModel):
             ],
         )
 
-        self._load_weights()
-
     def _load_weights(self) -> None:
         """(Re)build the HF processor + model from the checkpoint on ``self.device``."""
         # Read now rather than at import, so a token pushed in after the service
@@ -155,10 +155,6 @@ class SAM2Prompted(PromptedSegmentation, CapabilityModel):
         token = hf_token()
         self.processor = Sam2Processor.from_pretrained(self.checkpoint, token=token)
         self.model = Sam2Model.from_pretrained(self.checkpoint, token=token).to(self.device)
-
-    def load_context(self, context: Any) -> None:
-        """Runs once when MLflow loads the model; rebuild the HF objects fresh."""
-        self._load_weights()
 
     # -- capability handler -------------------------------------------------- #
     def segment_prompted(

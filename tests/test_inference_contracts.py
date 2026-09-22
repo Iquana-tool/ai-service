@@ -36,10 +36,12 @@ from models.base import (
     validate_and_normalize_params,
     validate_request_conditioning,
 )
+from models.dinov3_embedder import DINOv3Embedder
 from models.mask2former import Mask2Former
 from models.mask2former_dataset import LabelMapping
 from models.sam2 import SAM2Prompted
 from models.sam3 import SAM3
+from models.sam3_hierarchical import SAM3Hierarchical
 
 
 # --------------------------------------------------------------------------- #
@@ -328,7 +330,7 @@ def test_capability_model_predict_normalizes_parameters():
 
 def test_conditioning_cardinality_rejects_required_empty_and_accepts_optional_empty(monkeypatch):
     """Conditioning cardinality is enforced before handlers, including min_units=0."""
-    monkeypatch.setattr(SAM3, "_load_model", lambda self: None)
+    monkeypatch.setattr(SAM3, "_load_weights", lambda self: None)
     sam3 = SAM3()
     handler = MagicMock()
     monkeypatch.setattr(SAM3, "suggest_cross_image", handler)
@@ -636,11 +638,9 @@ def test_mask2former_declarations_audit():
     assert param_keys["threshold"].type == "float"
 
 
-def test_sam2_declarations_audit(monkeypatch):
+def test_sam2_declarations_audit():
     """SAM 2 variants must declare kind='none' with no unit for prompted-segmentation."""
-    # Mock _load_weights so we don't download/load Hugging Face weights in unit tests
-    monkeypatch.setattr(SAM2Prompted, "_load_weights", lambda self: None)
-
+    # No weight stub needed: constructing a model does not touch the Hub.
     for variant_key in ["sam2-1-tiny", "sam2-1-small", "sam2-1-base-plus", "sam2-1-large"]:
         instance = SAM2Prompted(variant_key)
         info = instance.model_info
@@ -658,7 +658,7 @@ def test_sam2_declarations_audit(monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_sam3_handler_forwarding(monkeypatch):
     """Test that predict() on SAM3 validates and forwards normalized parameters to handlers."""
-    monkeypatch.setattr(SAM3, "_load_model", lambda self: None)
+    monkeypatch.setattr(SAM3, "_load_weights", lambda self: None)
     monkeypatch.setattr(
         "iquana_toolbox.schemas.networking.http.services.get_image_from_url_cached",
         lambda url: np.zeros((64, 64, 3), dtype=np.uint8),
@@ -753,7 +753,7 @@ def test_sam3_handler_forwarding(monkeypatch):
 
 def test_sam3_multiple_exemplars_same_reference_image(monkeypatch):
     """Test that SAM 3 composites a single reference image once but generates prompt boxes for all its exemplar masks."""
-    monkeypatch.setattr(SAM3, "_load_model", lambda self: None)
+    monkeypatch.setattr(SAM3, "_load_weights", lambda self: None)
     monkeypatch.setattr(
         "iquana_toolbox.schemas.networking.http.services.get_image_from_url_cached",
         lambda url: np.zeros((64, 64, 3), dtype=np.uint8),
@@ -993,3 +993,110 @@ def test_routes_protect_task_parameter(monkeypatch):
     )
     asyncio.run(infer_instances(req_sugg))
     assert captured_params["task"] == "instance-suggestion"
+
+
+# --------------------------------------------------------------------------- #
+# Lazy weight loading
+# --------------------------------------------------------------------------- #
+def test_construction_does_not_load_weights(monkeypatch):
+    """No production model may touch the Hub from ``__init__``.
+
+    Every model in the catalog is constructed on each service start purely so it
+    can be registered, and that instance is then thrown away: MLflow strips the
+    live objects out of the pickle, and the serving path rebuilds them through
+    ``load_context``. An eager ``__init__`` therefore buys nothing and costs a
+    full weight load per model per boot.
+    """
+    def explode(self):
+        raise AssertionError(f"{type(self).__name__} loaded weights during __init__")
+
+    for cls in (SAM2Prompted, SAM3, SAM3Hierarchical, DINOv3Embedder, Mask2Former):
+        monkeypatch.setattr(cls, "_load_weights", explode)
+
+    SAM2Prompted("sam2-1-tiny")
+    SAM3()
+    SAM3Hierarchical()
+    DINOv3Embedder()
+    Mask2Former()
+
+
+def _lazy_model_class():
+    """A minimal model whose weights are one attribute, counting its loads."""
+    class LazyDummy(DummyInfer, CapabilityModel):
+        model_info = ModelInfo(
+            registry_key="lazy-dummy",
+            name="Lazy Dummy",
+            description="desc",
+            usage_tip="tip",
+            status="ready",
+        )
+        _unpicklable_attrs = ("weights",)
+
+        def __init__(self):
+            self.loads = 0
+
+        def _load_weights(self):
+            self.loads += 1
+            self.weights = object()
+
+    return LazyDummy
+
+
+def test_ensure_weights_loads_once_then_reloads_after_a_pickle_round_trip():
+    """Presence is read off the declared live attrs, so it survives no pickle."""
+    model = _lazy_model_class()()
+    assert model.loads == 0
+
+    model._ensure_weights()
+    assert model.loads == 1
+
+    # Already loaded -> no second load.
+    model._ensure_weights()
+    assert model.loads == 1
+
+    # What MLflow does: the declared live attr is dropped on the way out...
+    state = model.__getstate__()
+    assert "weights" not in state
+    assert "loads" in state  # plain config travels with the pickle
+
+    # ...so the model that comes back in a worker rebuilds it on first use.
+    restored = type(model).__new__(type(model))
+    restored.__setstate__(state)
+    restored._ensure_weights()
+    assert restored.loads == 2
+
+
+def test_predict_loads_weights_only_for_a_valid_request():
+    """Weights are built before the handler runs, and not at all for a 422."""
+    cls = _lazy_model_class()
+    cls.model_info.input_contracts = [
+        InputContract(
+            task="dummy-infer",
+            conditioning=ConditioningSpec(kind="none", user_selectable_count=False),
+            parameters=[
+                HyperParameter(
+                    key="threshold", label="Threshold", type="float",
+                    default_value=0.3, min_value=0.0, max_value=1.0,
+                ),
+            ],
+        ),
+    ]
+    model = cls()
+    req = DummyRequest(image_url="http://example.com/img.png")
+
+    # A request that will be rejected never pays for a load.
+    with pytest.raises(ValueError, match="Unknown parameter 'bad_key'"):
+        model.predict(None, req, {"task": "dummy-infer", "bad_key": 1})
+    assert model.loads == 0
+
+    # A valid one arrives at the handler with its weights in place.
+    model.predict(None, req, {"task": "dummy-infer"})
+    assert model.loads == 1
+    assert model.weights is not None
+
+
+def test_load_context_materializes_weights():
+    """``preload`` is only meaningful because load_context still loads eagerly."""
+    model = _lazy_model_class()()
+    model.load_context(None)
+    assert model.loads == 1

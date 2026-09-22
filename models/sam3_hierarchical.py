@@ -36,7 +36,7 @@ from models.registry import register_model
 
 from models import concat_ops, hierarchy_ops
 from models.base import CapabilityModel, InstanceSuggestion
-from paths import HF_ACCESS_TOKEN
+from paths import hf_token
 
 logger = getLogger(__name__)
 
@@ -120,21 +120,19 @@ class SAM3Hierarchical(InstanceSuggestion, CapabilityModel):
         ],
     )
 
-    # Live HF objects can't be cloudpickled; rebuilt in ``load_context`` (see SAM3).
+    # Live HF objects can't be cloudpickled; rebuilt on first use (see SAM3).
     _unpicklable_attrs = ("model", "processor")
 
     def __init__(self, threshold: float = 0.3, mask_threshold: float = 0.5, device: str = "auto"):
         self.device = ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else device
         self.threshold = threshold
         self.mask_threshold = mask_threshold
-        self._load_model()
 
-    def _load_model(self):
-        self.processor = Sam3Processor.from_pretrained("facebook/sam3", token=HF_ACCESS_TOKEN)
-        self.model = Sam3Model.from_pretrained("facebook/sam3", token=HF_ACCESS_TOKEN).to(self.device)
-
-    def load_context(self, context):
-        self._load_model()
+    def _load_weights(self):
+        """Load the gated SAM 3 weights; see :meth:`SAM3._load_weights` on the token."""
+        token = hf_token()
+        self.processor = Sam3Processor.from_pretrained("facebook/sam3", token=token)
+        self.model = Sam3Model.from_pretrained("facebook/sam3", token=token).to(self.device)
 
     # -- SAM 3 forward -------------------------------------------------------- #
     def _forward(
