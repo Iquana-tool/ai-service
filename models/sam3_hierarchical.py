@@ -25,6 +25,7 @@ that doesn't send them) it degrades to one whole-image pass -- plain SAM 3 sugge
 from logging import getLogger
 from typing import Any
 
+import cv2
 import numpy as np
 import torch
 from transformers.models.sam3 import Sam3Model, Sam3Processor
@@ -181,13 +182,22 @@ class SAM3Hierarchical(InstanceSuggestion, CapabilityModel):
         blur = params.get("background_blur", 0.03)
         min_target_frac = params.get("min_target_frac", 0.5)
 
-        image = request.image
+        # ``request.image`` comes from cv2.imread (BGR); SAM 3 expects RGB.
+        image = cv2.cvtColor(request.image, cv2.COLOR_BGR2RGB)
         image_hw = image.shape[:2]
         text = request.concept.name if request.concept is not None else "visual"
-        positives = [np.asarray(m).astype(bool) for m in request.positive_exemplar_masks]
-        negatives = [np.asarray(m).astype(bool) for m in request.negative_exemplar_masks]
+
+        raw_masks = (list(request.positive_exemplar_masks) + list(request.negative_exemplar_masks)
+                     + list(getattr(request, "parent_region_masks", [])))
+        if any(np.asarray(m).shape[:2] != image_hw for m in raw_masks):
+            # Masks rasterised at other dimensions (e.g. stale image width/height in the DB)
+            # would otherwise crop and prompt the wrong region -- typically the top-left corner.
+            logger.warning("Exemplar/parent masks are not %s; rescaling them to the image.", image_hw)
+        positives = [hierarchy_ops.fit_to_image(m, image_hw) for m in request.positive_exemplar_masks]
+        negatives = [hierarchy_ops.fit_to_image(m, image_hw) for m in request.negative_exemplar_masks]
         parents = [
-            m for m in (np.asarray(m).astype(bool) for m in getattr(request, "parent_region_masks", []))
+            m for m in (hierarchy_ops.fit_to_image(m, image_hw)
+                        for m in getattr(request, "parent_region_masks", []))
             if m.any()
         ]
 
@@ -232,7 +242,9 @@ class SAM3Hierarchical(InstanceSuggestion, CapabilityModel):
                 )
                 masks, scores = target_masks, canvas_scores[kept]
 
-            full_masks, kept = hierarchy_ops.paste_back(list(masks), crop, image_hw)
+            unique = hierarchy_ops.suppress_overlaps(list(masks), scores)
+            masks, scores = [masks[i] for i in unique], np.asarray(scores)[unique]
+            full_masks, kept = hierarchy_ops.paste_back(masks, crop, image_hw)
             all_masks.extend(full_masks)
             all_scores.extend(float(scores[i]) for i in kept)
             logger.debug("Parent %d (%s): %d suggestion(s).", p,
