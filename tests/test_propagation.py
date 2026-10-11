@@ -91,7 +91,7 @@ def _model(presence):
 def _run(model, obj, frames=None, start=0, end=None, direction="both", threshold=0.5):
     frames = frames or [np.zeros((H, W, 3), dtype=np.uint8)] * len(model.video_model.presence)
     end = len(frames) - 1 if end is None else end
-    return model._propagate_object(frames, obj, start, end, direction, threshold)
+    return list(model._propagate_object(frames, obj, start, end, direction, threshold))
 
 
 # --------------------------------------------------------------------------- #
@@ -132,15 +132,23 @@ def test_video_weights_stay_out_of_the_pickle():
 def test_fills_every_frame_but_the_drawn_one():
     model, fake = _model([0.9] * 5)
     results = _run(model, _object(2))
-    assert [r.frame_index for r in results] == [0, 1, 3, 4]
+    assert sorted(r.frame_index for r in results) == [0, 1, 3, 4]
     assert all(r.mask is not None and r.object_id == 1 for r in results)
     assert fake.conditioned == [2]
     assert fake.passes == [(2, False), (2, True)]
 
 
+def test_streams_outward_one_pass_at_a_time():
+    model, _ = _model([0.9] * 5)
+    frames = [np.zeros((H, W, 3), dtype=np.uint8)] * 5
+    stream = model._propagate_object(frames, _object(2), 0, 4, "both", 0.5)
+    assert next(stream).frame_index == 3  # the first frame arrives before the rest is computed
+    assert [r.frame_index for r in stream] == [4, 1, 0]
+
+
 def test_respects_range_and_direction():
     model, fake = _model([0.9] * 6)
-    assert [r.frame_index for r in _run(model, _object(2), start=1, end=4)] == [1, 3, 4]
+    assert sorted(r.frame_index for r in _run(model, _object(2), start=1, end=4)) == [1, 3, 4]
     model, fake = _model([0.9] * 6)
     assert [r.frame_index for r in _run(model, _object(2), direction="forward")] == [3, 4, 5]
     assert fake.passes == [(2, False)]
@@ -163,15 +171,17 @@ def test_several_drawn_frames_condition_one_session():
     model, fake = _model([0.9] * 6)
     results = _run(model, _object(1, 4))
     assert fake.conditioned == [1, 4]
-    assert fake.passes == [(1, False), (4, True)]
-    assert [r.frame_index for r in results] == [0, 2, 3, 5]
+    # Forward and backward from the first drawing; the second conditions both.
+    assert fake.passes == [(1, False), (1, True)]
+    assert sorted(r.frame_index for r in results) == [0, 2, 3, 5]
+    assert len(results) == 4  # no frame produced twice
 
 
 def test_drawn_frame_outside_the_range_still_conditions():
     model, fake = _model([0.9] * 6)
     results = _run(model, _object(5), start=0, end=2, direction="backward")
     assert fake.conditioned == [5]
-    assert [r.frame_index for r in results] == [0, 1, 2]
+    assert sorted(r.frame_index for r in results) == [0, 1, 2]
 
 
 # --------------------------------------------------------------------------- #
@@ -199,7 +209,7 @@ def test_real_oct_volume():
         objects=[PropagationObject(object_id=1, frame_masks=[
             FrameMask(frame_index=middle, mask=BinaryMask.from_numpy_array((seed > 0).astype(np.uint8)))])],
     )
-    results = model.propagate(request, {"presence_threshold": 0.5})
+    results = list(model.propagate(request, {"presence_threshold": 0.5}))
     assert len(results) == len(paths) - 1
     assert all(r.mask is not None and r.presence > 0.9 for r in results)
     areas = [int(r.mask.mask.sum()) for r in results]

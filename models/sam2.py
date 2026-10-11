@@ -13,7 +13,7 @@ Ported from the former prompted-seg-service. Changes from the original:
     transformers-upgrade-proof behaviour with less code.
 """
 from logging import getLogger
-from typing import Any
+from typing import Any, Iterator
 
 import cv2
 import numpy as np
@@ -195,22 +195,25 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
         self.video_model = Sam2VideoModel.from_pretrained(self.checkpoint, token=token).to(self.device)
 
     # -- capability handlers ------------------------------------------------- #
-    def propagate(self, request, params: dict[str, Any] | None = None) -> list[PropagatedMask]:
-        """Carry each object from the frames it is drawn on through the requested range."""
+    def propagate(self, request, params: dict[str, Any] | None = None) -> Iterator[PropagatedMask]:
+        """Carry each object from the frames it is drawn on through the requested range.
+
+        A generator: each frame is yielded as soon as the model is through with it,
+        so a caller can stream results while the rest of the stack is still being
+        worked on. Nothing runs until the first item is asked for.
+        """
         self._ensure_video_weights()
         threshold = float((params or {}).get("presence_threshold", 0.5))
         # Image URLs are read with OpenCV (BGR); the video processor expects RGB.
         frames = [cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) for frame in request.frames]
         start, end = request.frame_range
-        results: list[PropagatedMask] = []
         for obj in request.objects:
-            results += self._propagate_object(frames, obj, start, end, request.direction, threshold)
-        return results
+            yield from self._propagate_object(frames, obj, start, end, request.direction, threshold)
 
     def _propagate_object(
         self, frames: list[np.ndarray], obj: PropagationObject, start: int, end: int,
         direction: str, threshold: float,
-    ) -> list[PropagatedMask]:
+    ) -> Iterator[PropagatedMask]:
         """Run one object through the stack in its own inference session.
 
         One session per object, because the processor tracks "objects with new
@@ -218,12 +221,18 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
         frame cannot be run -- so objects drawn on different slices cannot share
         a session. The cost is re-encoding the frames per object, which at OCT
         sizes is seconds.
+
+        Every drawn frame is a conditioning frame, and SAM 2 attends to all of them
+        on every step. So one pass forward from the first drawn frame and one pass
+        backward from that same frame visit each frame once, already informed by
+        drawings further along -- no frame is produced twice. Only "backward" alone
+        starts from the last drawn frame, so the frames below it are covered.
         """
         height, width = frames[0].shape[:2]
         drawn = sorted({frame_mask.frame_index for frame_mask in obj.frame_masks})
         drawn = [index for index in drawn if index < len(frames)]
         if not drawn:
-            return []
+            return
 
         # The session spans the range plus any drawn frame outside it, so every
         # drawing conditions the result. Indices inside the session are offset.
@@ -238,7 +247,6 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
         )
         masks_by_frame = {fm.frame_index: fm.mask.mask for fm in obj.frame_masks}
 
-        found: dict[int, tuple[np.ndarray | None, float]] = {}
         with torch.no_grad():
             # Each drawn frame becomes a conditioning frame. The forward pass on it
             # writes it into the session's memory, which propagation requires.
@@ -252,7 +260,9 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
             passes = []
             if direction in ("both", "forward"):
                 passes.append((drawn[0], False))
-            if direction in ("both", "backward"):
+            if direction == "both":
+                passes.append((drawn[0], True))
+            elif direction == "backward":
                 passes.append((drawn[-1], True))
 
             for origin, reverse in passes:
@@ -273,22 +283,14 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
                             )[0][0, 0].cpu().numpy().astype(np.uint8)
                             if not mask.any():
                                 mask = None
-                        # Between two drawn frames both passes visit a frame; the
-                        # surer answer wins.
-                        if index not in found or presence > found[index][1]:
-                            found[index] = (mask, presence)
+                        yield PropagatedMask(
+                            object_id=obj.object_id,
+                            frame_index=index,
+                            mask=BinaryMask.from_numpy_array(mask, score=presence) if mask is not None else None,
+                            presence=min(1.0, max(0.0, presence)),
+                        )
                     if low_in_a_row >= _FRAMES_TO_CALL_IT_GONE:
                         break
-
-        return [
-            PropagatedMask(
-                object_id=obj.object_id,
-                frame_index=index,
-                mask=BinaryMask.from_numpy_array(mask, score=presence) if mask is not None else None,
-                presence=min(1.0, max(0.0, presence)),
-            )
-            for index, (mask, presence) in sorted(found.items())
-        ]
 
     def segment_prompted(
         self, request, params: dict[str, Any] | None = None
