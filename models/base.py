@@ -72,6 +72,7 @@ from iquana_toolbox.schemas.networking.http.services import (
     InstanceSegmentationRequest,
     InstanceSuggestionRequest,
     PromptedSegmentationRequest,
+    PropagationRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,7 @@ EMBED = register_task("embed", EmbedRequest, "embed")
 CROSS_IMAGE_SUGGESTION = register_task(
     "cross-image-suggestion", CrossImageSuggestionRequest, "suggest_cross_image"
 )
+PROPAGATION = register_task("propagation", PropagationRequest, "propagate")
 
 
 # --------------------------------------------------------------------------- #
@@ -214,6 +216,22 @@ class Embedding(TaskCapability):
     TASK = EMBED
 
     def embed(self, request: EmbedRequest, params: dict[str, Any]):
+        raise NotImplementedError
+
+
+class Propagation(TaskCapability):
+    """Carry objects drawn on some frames of a stack to the other frames.
+
+    One capability for three things that are the same to a model: the slices of
+    an OCT volume, the planes of a z-stack and the frames of a video. Returns one
+    :class:`~iquana_toolbox.schemas.networking.http.services.PropagatedMask` per
+    object and filled frame -- never for a frame the object was drawn on, which
+    already holds the person's own outline.
+    """
+
+    TASK = PROPAGATION
+
+    def propagate(self, request: PropagationRequest, params: dict[str, Any]):
         raise NotImplementedError
 
 
@@ -502,10 +520,20 @@ class CapabilityModel(BaseModel):
         "loaded" flag that could survive a pickle round-trip and lie about a
         model whose weights went with it.
         """
-        if all(getattr(self, attr, None) is not None for attr in self._unpicklable_attrs):
+        if all(getattr(self, attr, None) is not None for attr in self._core_weight_attrs()):
             return
         logger.debug("Loading weights for %s", type(self).__name__)
         self._load_weights()
+
+    def _core_weight_attrs(self) -> tuple[str, ...]:
+        """The live objects every task needs, which ``_load_weights`` builds.
+
+        Defaults to all of ``_unpicklable_attrs``. A model with weights only one
+        task uses (SAM 2's video model, needed for propagation alone) lists them in
+        ``_unpicklable_attrs`` so they stay out of the pickle, and narrows this to
+        what the rest needs, loading the extra ones itself when that task runs.
+        """
+        return getattr(self, "_core_weights", None) or self._unpicklable_attrs
 
     def load_context(self, context: Any) -> None:
         """MLflow's load hook: materialize the weights as the model is loaded.

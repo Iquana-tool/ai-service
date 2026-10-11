@@ -639,13 +639,17 @@ def test_mask2former_declarations_audit():
 
 
 def test_sam2_declarations_audit():
-    """SAM 2 variants must declare kind='none' with no unit for prompted-segmentation."""
+    """SAM 2 variants must declare kind='none' with no unit for prompted-segmentation,
+    and propagation with only its presence threshold."""
     # No weight stub needed: constructing a model does not touch the Hub.
     for variant_key in ["sam2-1-tiny", "sam2-1-small", "sam2-1-base-plus", "sam2-1-large"]:
         instance = SAM2Prompted(variant_key)
         info = instance.model_info
-        assert len(info.input_contracts) == 1
-        contract = info.input_contracts[0]
+        assert sorted(c.task for c in info.input_contracts) == ["prompted-segmentation", "propagation"]
+        propagation = instance.get_input_contract("propagation")
+        assert propagation.conditioning.kind == "none"
+        assert [p.key for p in propagation.parameters] == ["presence_threshold"]
+        contract = instance.get_input_contract("prompted-segmentation")
         assert contract.task == "prompted-segmentation"
         assert contract.conditioning.kind == "none"
         assert contract.conditioning.unit is None
