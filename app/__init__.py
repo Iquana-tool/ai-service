@@ -41,6 +41,7 @@ from app.routes.cross_image import (
     router as cross_image_router,
     session_router as cross_image_session_router,
 )
+from app.routes.propagation import router as propagation_router
 from app.routes.training import router as training_router
 from paths import ALLOWED_ORIGINS, SERVICE_DESCRIPTION, SERVICE_NAME
 
@@ -88,6 +89,11 @@ TASK_MOUNTS: list[TaskMount] = [
         task="cross-image-suggestion",
         prefix="/cross-image-suggestion",
         routers=[cross_image_router, cross_image_session_router],
+    ),
+    TaskMount(
+        task="propagation",
+        prefix="/propagation",
+        routers=[propagation_router],
     ),
 ]
 
