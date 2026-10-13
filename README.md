@@ -31,7 +31,7 @@ calls, unchanged.
 |---|---|---|
 | `/prompted-segmentation` | Turns a point, box, polygon or freedraw prompt into an outline | SAM 2, SAM 3 |
 | `/instance-suggestion` | Suggests further instances resembling the annotated ones | SAM 3 |
-| `/instance-segmentation` | Full-image instance segmentation, plus fine-tuning | Mask2Former |
+| `/instance-segmentation` | Full-image instance segmentation, plus fine-tuning | Mask2Former, Choroidalyzer (OCT) |
 | `/embed` | Whole-image (CLS) and region descriptors | DINOv3 |
 | `/cross-image-suggestion` | Concept segmentation from exemplars retrieved across a dataset | SAM 3 |
 
@@ -111,8 +111,9 @@ app/
 └── training_runs.py  # Run bookkeeping and MLflow tags
 models/
 ├── base.py           # Capability interface: tasks, mixins, dispatching predict
+├── semantic.py       # Any semantic model as instance segmentation: classes + score maps in, objects out
 ├── registry.py       # @register_model, in-tree discovery, plugin loading
-├── sam2.py, sam3.py, mask2former.py, dinov3_embedder.py
+├── sam2.py, sam3.py, mask2former.py, dinov3_embedder.py, choroidalyzer.py
 ├── backbones/        # DINOv3 backbone
 ├── dataloaders.py, mask2former_dataset.py
 └── concat_ops.py, embedding_ops.py
