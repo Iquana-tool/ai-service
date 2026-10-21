@@ -41,6 +41,9 @@ from paths import hf_token
 
 logger = getLogger(__name__)
 
+#: Side of the box drawn around a click, as a fraction of the image side.
+_CLICK_BOX_FRACTION = 0.06
+
 
 @register_model
 class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, CapabilityModel):
@@ -104,7 +107,10 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
                 conditioning=ConditioningSpec(
                     kind="reference_images", unit="image",
                     min_units=1, max_units=1,
-                    requires_complete_annotation=True,
+                    # Any image with an exemplar of the concept will do. Objects left
+                    # unannotated on the reference are not negatives: detections on the
+                    # reference side of the canvas are discarded anyway.
+                    requires_complete_annotation=False,
                     user_selectable_count=False,
                 ),
                 parameters=[
@@ -260,11 +266,10 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
 
         masks = results["masks"].cpu().numpy()
         scores = results["scores"].cpu().numpy()
-        if len(scores) == 0:
+        best = self._pick_prompted(masks, scores, request.prompts, box)
+        if best is None:
             return []
 
-        # One prompted object: keep the highest-scoring instance the box elicited.
-        best = int(np.argmax(scores))
         contour = Contour.from_binary_mask(
             binary_mask=masks[best].astype(np.uint8),
             only_return_biggest_contour=True,
@@ -274,26 +279,67 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
         return [contour] if contour is not None else []
 
     @staticmethod
+    def _pick_prompted(masks: np.ndarray, scores: np.ndarray, prompts: Prompts,
+                       box: list[float]) -> int | None:
+        """Index of the detection that is the prompted object, or None.
+
+        SAM 3 treats the box as an *exemplar*: it returns every instance of whatever
+        the box shows, anywhere in the image, so the top score is often a different
+        object. With clicks, the prompted object is the best-scoring detection that
+        holds every positive click and no negative one. Without, it is the detection
+        that best fills the drawn box (IoU), with the score breaking ties. A box
+        around a click says nothing about the object's extent, so it is not used to
+        rank there.
+        """
+        if len(scores) == 0:
+            return None
+        height, width = masks.shape[1:3]
+        x0, y0, x1, y1 = (int(round(v)) for v in box)
+        box_area = max((x1 - x0) * (y1 - y0), 1)
+        points = prompts.point_prompts or []
+
+        def at(mask, point) -> bool:
+            col = min(int(point.x * width), width - 1)
+            row = min(int(point.y * height), height - 1)
+            return bool(mask[row, col])
+
+        ranked = []
+        for index, mask in enumerate(masks.astype(bool)):
+            if points:
+                if all(at(mask, p) == bool(p.label) for p in points):
+                    ranked.append((scores[index], index))
+            else:
+                inside = mask[y0:y1, x0:x1].sum()
+                iou = inside / (mask.sum() + box_area - inside)
+                ranked.append((iou, scores[index], index))
+        return max(ranked)[-1] if ranked else None
+
+    @staticmethod
     def _prompt_to_box(prompts: Prompts, image_shape) -> list[float] | None:
         """Derive a single pixel-space ``[xmin, ymin, xmax, ymax]`` localisation box.
 
         Prefers an explicit box; otherwise falls back to the bounding box of a
-        polygon, point set, or circle. Returns ``None`` if no geometric prompt was
-        given. Coordinates in the request are normalised [0, 1]; SAM 3 expects pixels.
+        polygon, the positive points, or a circle. Returns ``None`` if no geometric
+        prompt was given. Coordinates in the request are normalised [0, 1]; SAM 3
+        expects pixels.
         """
         height, width = image_shape[0], image_shape[1]
 
         rel: tuple[float, float, float, float] | None = None
+        positives = [p for p in prompts.point_prompts or [] if p.label]
         if prompts.box_prompt:
             rel = tuple(prompts.box_prompt.xyxy)
         elif prompts.polygon_prompt and prompts.polygon_prompt.vertices:
             xs = [v[0] for v in prompts.polygon_prompt.vertices]
             ys = [v[1] for v in prompts.polygon_prompt.vertices]
             rel = (min(xs), min(ys), max(xs), max(ys))
-        elif prompts.point_prompts:
-            xs = [p.x for p in prompts.point_prompts]
-            ys = [p.y for p in prompts.point_prompts]
-            rel = (min(xs), min(ys), max(xs), max(ys))
+        elif positives:
+            xs = [p.x for p in positives]
+            ys = [p.y for p in positives]
+            # SAM 3 has no point input; a click becomes a small exemplar box around it.
+            # A zero-size box (one click) gave it nothing to look at.
+            pad = _CLICK_BOX_FRACTION / 2
+            rel = (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
         elif prompts.circle_prompt:
             c = prompts.circle_prompt
             rel = (c.center_x - c.radius, c.center_y - c.radius,
