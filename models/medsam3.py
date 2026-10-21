@@ -5,9 +5,9 @@ SAM 3 (gated, SAM licence).
 
 MedSAM3 is SAM 3 plus a LoRA adapter, trained on ~660k medical images across CT,
 MRI, X-ray, ultrasound, OCT, microscopy, endoscopy and more, each object tied to
-one of 330 medical concept names. It serves the same tasks as :class:`SAM3`, and
-gains most where a concept name goes along with the request ("polyp", "retinal
-fluid", ...), because that is what the adapter was trained on.
+one of 330 medical concept names. It serves SAM 3's suggestion tasks, not prompted
+segmentation (see :class:`MedSAM3`), and works from the concept name sent with the
+request ("polyp", "retinal fluid", ...), because that is what it was trained on.
 
 The adapter is published as raw LoRA matrices for the *original* SAM 3 code, not
 for transformers. ``_load_weights`` therefore loads the HF SAM 3 and folds each
@@ -27,6 +27,7 @@ from transformers.models.sam3 import Sam3Model, Sam3Processor
 from iquana_toolbox.schemas.model_info import ModelInfo
 from models.registry import register_model
 
+from models.base import PROMPTED_SEGMENTATION
 from models.sam3 import SAM3
 from paths import hf_token
 
@@ -108,7 +109,18 @@ def merge_lora(model: torch.nn.Module, lora: dict[str, torch.Tensor], alpha: flo
 
 @register_model
 class MedSAM3(SAM3):
-    """SAM 3 with the MedSAM3 adapter merged in; same tasks and handlers as SAM 3."""
+    """SAM 3 with the MedSAM3 adapter merged in: SAM 3's handlers, minus prompted segmentation.
+
+    The adapter was trained on text prompts alone: its box- and point-projection
+    LoRA matrices are exactly zero, i.e. they never received a gradient. Given a
+    click or a box it returns its favourite structure in the image, wherever the
+    prompt was, so it does not offer prompted segmentation. Its exemplar boxes in
+    suggestion are likewise weak; the label name carries the request.
+    """
+
+    @classmethod
+    def supported_tasks(cls):
+        return [task for task in super().supported_tasks() if task is not PROMPTED_SEGMENTATION]
 
     model_info = ModelInfo(
         registry_key="medsam3",
@@ -119,9 +131,9 @@ class MedSAM3(SAM3):
             "Finds every instance of a concept from examples and its name."
         ),
         usage_tip=(
-            "Works like SAM 3, but name the label after the medical concept (e.g. 'polyp', "
-            "'liver tumor', 'nucleus'): the name is sent as a text prompt with the examples. "
-            "MedSAM3 was trained on such names, and without one it over-detects."
+            "For instance and cross-image suggestion. Name the label after the medical concept "
+            "(e.g. 'polyp', 'liver tumor', 'choroid'): MedSAM3 was trained on such names and "
+            "finds objects from the name more than from the examples. Without one it over-detects."
         ),
         tags={
             "status": "ready",
@@ -131,12 +143,16 @@ class MedSAM3(SAM3):
             "publisher": "medsam3",
             "license": "apache-2.0 (adapter), sam (base)",
             "source": f"https://huggingface.co/{_LORA_REPO}",
-            "prompt_types_supported": "['box', 'polygon', 'point']",
-            "refinement_supported": "false",
+            # Explicit, because tags are only ever set, never removed, when a registered
+            # model is re-synced: a "true" left from before would keep MedSAM3 listed.
+            PROMPTED_SEGMENTATION.tag_key: "false",
         },
         status="ready",
         trainable=False,
-        input_contracts=[c.model_copy(deep=True) for c in SAM3.model_info.input_contracts],
+        input_contracts=[
+            c.model_copy(deep=True) for c in SAM3.model_info.input_contracts
+            if c.task != PROMPTED_SEGMENTATION.name
+        ],
     )
 
     def _load_weights(self):

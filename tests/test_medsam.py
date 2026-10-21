@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import pickle
 
+import numpy as np
 import pytest
 import torch
 from torch import nn
@@ -135,16 +136,69 @@ def test_point_prompt_layers_are_skipped_and_mismatches_fail():
         merge_lora(model, _lora("dot_prod_scoring.prompt_proj", 4, 4), alpha=2)
 
 
-def test_medsam3_serves_what_sam3_serves():
+def test_medsam3_serves_sam3_suggestion_but_not_prompting():
     assert MedSAM3 in collected_models()
     info = MedSAM3.model_info
     assert info.registry_key == "medsam3"
     assert info.tags["domain"] == "medical"
-    assert info.tags["tasks"] == SAM3.model_info.tags["tasks"]
-    assert [c.task for c in info.input_contracts] == [c.task for c in SAM3.model_info.input_contracts]
+    assert set(info.tags["tasks"].split(",")) == {"instance-suggestion", "cross-image-suggestion"}
+    assert info.tags["task"] == "instance-suggestion"
+    # Explicitly false, so a re-sync overwrites the "true" an earlier registration left.
+    assert info.tags["task_prompted_segmentation"] == "false"
+    assert sorted(c.task for c in info.input_contracts) == ["cross-image-suggestion", "instance-suggestion"]
     # Its own contracts, so tuning one model's defaults never edits the other's.
     assert info.input_contracts[0] is not SAM3.model_info.input_contracts[0]
-    assert pickle.loads(pickle.dumps(MedSAM3())).threshold == 0.3
+    assert "prompted-segmentation" in SAM3.model_info.tags["tasks"]
+
+    model = MedSAM3()
+    with pytest.raises(ValueError, match="does not support task 'prompted-segmentation'"):
+        model.predict(None, object(), {"task": "prompted-segmentation"})
+    assert pickle.loads(pickle.dumps(model)).threshold == 0.3
+
+
+# -- SAM 3 prompted selection ------------------------------------------------ #
+def _box_mask(y0, y1, x0, x1, shape=(100, 100)):
+    mask = np.zeros(shape, dtype=np.uint8)
+    mask[y0:y1, x0:x1] = 1
+    return mask
+
+
+def test_a_click_picks_the_detection_under_it_not_the_top_score():
+    from iquana_toolbox.schemas.prompts import PointPrompt, Prompts
+
+    masks = np.stack([_box_mask(0, 10, 0, 100), _box_mask(40, 60, 40, 60)])
+    scores = np.array([0.9, 0.4])
+    click = Prompts(point_prompts=[PointPrompt(x=0.5, y=0.5, label=True)])
+    box = SAM3._prompt_to_box(click, (100, 100))
+    assert box[2] - box[0] > 0  # a click is no longer a zero-size box
+
+    assert SAM3._pick_prompted(masks, scores, click, box) == 1
+
+
+def test_a_negative_click_rules_a_detection_out():
+    from iquana_toolbox.schemas.prompts import PointPrompt, Prompts
+
+    masks = np.stack([_box_mask(30, 70, 30, 70), _box_mask(45, 55, 45, 55)])
+    clicks = Prompts(point_prompts=[PointPrompt(x=0.5, y=0.5, label=True),
+                                    PointPrompt(x=0.35, y=0.35, label=False)])
+    box = SAM3._prompt_to_box(clicks, (100, 100))
+    # The negative click is not part of the exemplar box.
+    assert box[0] > 35
+
+    assert SAM3._pick_prompted(masks, np.array([0.9, 0.5]), clicks, box) == 1
+    nothing = Prompts(point_prompts=[PointPrompt(x=0.9, y=0.9, label=True)])
+    assert SAM3._pick_prompted(masks, np.array([0.9, 0.5]), nothing, box) is None
+
+
+def test_a_box_picks_the_detection_that_fills_it():
+    from iquana_toolbox.schemas.prompts import BoxPrompt, Prompts
+
+    masks = np.stack([_box_mask(0, 10, 0, 100), _box_mask(40, 60, 40, 60), _box_mask(35, 65, 35, 65)])
+    prompt = Prompts(box_prompt=BoxPrompt(min_x=0.4, min_y=0.4, max_x=0.6, max_y=0.6))
+    box = SAM3._prompt_to_box(prompt, (100, 100))
+
+    assert SAM3._pick_prompted(masks, np.array([0.95, 0.5, 0.8]), prompt, box) == 1
+    assert SAM3._pick_prompted(np.zeros((0, 100, 100)), np.zeros(0), prompt, box) is None
 
 
 # -- Real checkpoints (opt-in) ----------------------------------------------- #
