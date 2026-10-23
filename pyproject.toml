@@ -16,7 +16,7 @@ dependencies = [
     # --- ML core (union of the three former services) ---
     "torch>=2.12.1",
     "torchvision>=0.27.1",
-    "transformers>=4.56.0",  # DINOv3 support landed in 4.56
+    "transformers>=4.56.0", # DINOv3 support landed in 4.56
     "accelerate",
     "timm>=0.9.0",
     "huggingface-hub>=1.3.0",
@@ -26,7 +26,7 @@ dependencies = [
     "pillow>=10.0.0",
     "scikit-image>=0.26.0",
     "scikit-learn",
-    "scipy>=1.11.0",  # Hungarian matching in the DINOv3 set loss
+    "scipy>=1.11.0", # Hungarian matching in the DINOv3 set loss
     "scipy-stubs",
     "pycocotools",
     # --- instance-suggestion extras (GeCo + hydra config stack) ---
@@ -38,6 +38,7 @@ dependencies = [
     "pydantic",
     "requests>=2.31.0",
     "tqdm",
+    "open-clip-torch>=2.32.0",
 ]
 
 [project.optional-dependencies]

@@ -30,6 +30,10 @@ MLFLOW_URL = getenv("MLFLOW_URL", getenv("ML_FLOW_URL", "http://localhost:5000")
 REDIS_URL = getenv("REDIS_URL", "redis://localhost:6379")
 ALLOWED_ORIGINS = getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 TRAINING_START_TIMEOUT_SECONDS = int(getenv("TRAINING_START_TIMEOUT_SECONDS", "900"))
+# Extra image embedders beyond the presets, as comma-separated Hugging Face ids, each
+# optionally suffixed with "@<loader>" (transformers, open_clip or timm), e.g.
+# "facebook/dinov2-base,imageomics/bioclip@open_clip". See models/pretrained_embedders.py.
+EXTRA_EMBEDDERS = getenv("IQUANA_EXTRA_EMBEDDERS", "")
 
 # HuggingFace. Empty/blank -> None so transformers does an anonymous request
 # instead of sending an illegal "Authorization: Bearer " header.
