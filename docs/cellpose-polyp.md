@@ -48,11 +48,15 @@ made from the CPU load check.
 
 ## Prediction behavior
 
-Images are converted from BGR to RGB and kept at native resolution. Each image
-side must be at least 640 pixels. The provider runs 640×640 outer tiles with
-128-pixel overlap, in row-major order. Instance centroids belong to half-open
-tile cores whose cuts are the integer midpoints of adjacent tile starts and
-ends; this assigns an overlapping detection to one tile only.
+Images are converted from BGR to RGB and kept at native resolution. If either
+image side is below 640 pixels, the image is padded along the right and bottom
+edges using edge replication to reach at least 640×640 without rescaling.
+Predicted pixels within the padding are removed, and surviving tile masks and
+contour polygons are mapped back into native original-image coordinates. The
+provider runs 640×640 outer tiles with 128-pixel overlap, in row-major order.
+Instance centroids belong to half-open tile cores whose cuts are the integer
+midpoints of adjacent tile starts and ends; this assigns an overlapping detection
+to one tile only.
 
 The Cellpose call uses `batch_size=1`, `bsize=640`, `tile_overlap=0.1`, RGB
 `channel_axis=2`, `resample=True`, normalization, `diameter=None`, cell-probability

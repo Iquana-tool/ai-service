@@ -74,8 +74,10 @@ def axis_windows(length: int, tile: int = TILE_SIZE, overlap: int = TILE_OVERLAP
     """Return exact reference ``(start, core_lo, core_hi)`` windows."""
     if tile <= 0 or overlap < 0 or overlap >= tile:
         raise ValueError("Tile size must be positive and overlap must be in [0, tile size).")
-    if length < tile:
-        raise ValueError(f"image side {length} is smaller than the required {tile}-pixel tile")
+    if length <= 0:
+        raise ValueError("Length must be positive.")
+    if length <= tile:
+        return [(0, 0, tile)]
     starts = list(range(0, length - tile + 1, tile - overlap))
     if starts[-1] != length - tile:
         starts.append(length - tile)
@@ -83,12 +85,44 @@ def axis_windows(length: int, tile: int = TILE_SIZE, overlap: int = TILE_OVERLAP
     return list(zip(starts, [0] + cuts, cuts + [length]))
 
 
+def pad_image_to_min_tile(
+    image: np.ndarray, min_tile: int = TILE_SIZE
+) -> tuple[np.ndarray, int, int]:
+    """Pad image bottom and right edges with edge replication to at least min_tile.
+
+    Returns (padded_image, pad_y, pad_x) where pad_y and pad_x are the number
+    of padded pixels added on the bottom and right edges respectively. No resizing
+    is performed; images already at least min_tile in both dimensions are returned
+    as-is.
+    """
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("Expected a three-channel BGR/RGB image.")
+    orig_h, orig_w = image.shape[:2]
+    if orig_h <= 0 or orig_w <= 0:
+        raise ValueError("Image dimensions must be positive.")
+    pad_y = max(0, min_tile - orig_h)
+    pad_x = max(0, min_tile - orig_w)
+    if pad_y == 0 and pad_x == 0:
+        return image, 0, 0
+    padded = cv2.copyMakeBorder(
+        image,
+        top=0,
+        bottom=pad_y,
+        left=0,
+        right=pad_x,
+        borderType=cv2.BORDER_REPLICATE,
+    )
+    return padded, pad_y, pad_x
+
+
 def tile_grid(height: int, width: int) -> list[Tile]:
     """The reference's row-major 640/128 tile grid and half-open ownership cores."""
-    columns = axis_windows(width)
+    if height <= 0 or width <= 0:
+        raise ValueError("Height and width must be positive.")
+    columns = axis_windows(max(width, TILE_SIZE))
     return [
         Tile(x0, y0, (x_lo, y_lo, x_hi, y_hi))
-        for y0, y_lo, y_hi in axis_windows(height)
+        for y0, y_lo, y_hi in axis_windows(max(height, TILE_SIZE))
         for x0, x_lo, x_hi in columns
     ]
 
@@ -593,11 +627,24 @@ class CellposePolyp(InstanceSegmentation, CapabilityModel):
         if image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
             raise ValueError("Cellpose-SAM polyp inference expects a three-channel BGR image.")
         height, width = image_bgr.shape[:2]
-        tiles_all = tile_grid(height, width)
+        if height <= 0 or width <= 0:
+            raise ValueError("Image dimensions must be positive.")
+
+        padded_bgr, pad_y, pad_x = pad_image_to_min_tile(image_bgr)
+        padded_h, padded_w = padded_bgr.shape[:2]
+        tiles_all = tile_grid(padded_h, padded_w)
+
         parent = decode_parent_regions(params.get("parent_regions"), height, width)
-        tiles = select_tiles(tiles_all, parent)
+        if parent is not None and (pad_y > 0 or pad_x > 0):
+            working_parent = np.pad(
+                parent, ((0, pad_y), (0, pad_x)), mode="constant", constant_values=False
+            )
+        else:
+            working_parent = parent
+
+        tiles = select_tiles(tiles_all, working_parent)
         label_id = _active_polyp_label_id(request)
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        image_rgb = cv2.cvtColor(padded_bgr, cv2.COLOR_BGR2RGB)
 
         self._ensure_weights()
         if self._cellpose_model is None or self._checkpoint_sha256 is None:
@@ -617,14 +664,24 @@ class CellposePolyp(InstanceSegmentation, CapabilityModel):
             with _INFERENCE_LOCK, torch.inference_mode():
                 for tile_index, tile in enumerate(tiles):
                     crop = image_rgb[tile.y0:tile.y0 + TILE_SIZE, tile.x0:tile.x0 + TILE_SIZE]
+                    valid_tile_h = max(0, min(TILE_SIZE, height - tile.y0))
+                    valid_tile_w = max(0, min(TILE_SIZE, width - tile.x0))
+
                     labels, cellprob_logits = eval_full_640(self._cellpose_model, crop)
+
+                    # Remove predicted pixels in padding before centroid ownership/scoring
+                    if valid_tile_h < TILE_SIZE:
+                        labels[valid_tile_h:, :] = 0
+                    if valid_tile_w < TILE_SIZE:
+                        labels[:, valid_tile_w:] = 0
+
                     instance_labels = [int(value) for value in np.unique(labels) if value > 0]
                     if not instance_labels:
                         continue
                     masks = np.stack([labels == value for value in instance_labels], axis=0)
                     owned, centroid_x, centroid_y = centre_owned(masks, tile)
-                    if parent is not None:
-                        owned &= parent_centroid_owned(parent, centroid_x, centroid_y)
+                    if working_parent is not None:
+                        owned &= parent_centroid_owned(working_parent, centroid_x, centroid_y)
 
                     for local_index, instance_label in enumerate(instance_labels):
                         if not owned[local_index]:
@@ -636,14 +693,18 @@ class CellposePolyp(InstanceSegmentation, CapabilityModel):
                         if score < threshold:
                             continue
 
-                        rle = native_rle(mask, tile.x0, tile.y0, height, width)
+                        valid_mask = mask[:valid_tile_h, :valid_tile_w]
+                        if not valid_mask.any():
+                            continue
+
+                        rle = native_rle(valid_mask, tile.x0, tile.y0, height, width)
                         rle_digest = hashlib.sha256(
                             f"{rle['size'][0]}x{rle['size'][1]}:{rle['counts']}".encode("ascii")
                         ).hexdigest()[:16]
                         source_instance_id = f"{MODEL_KEY}:t{tile_index:04d}:{rle_digest}"
                         contour_items.extend(
                             _contour_dicts(
-                                mask,
+                                valid_mask,
                                 score=score,
                                 label_id=label_id,
                                 model_key=request.model_registry_key,

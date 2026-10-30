@@ -20,7 +20,7 @@ from models.registry import register_model
 from models.cpsam_polyp import (
     _active_polyp_label_id, _contour_dicts, _device_from_name,
     _sha256, centre_owned, configured_checkpoint, decode_parent_regions, native_rle,
-    parent_centroid_owned, runtime_status, select_tiles, tile_grid,
+    pad_image_to_min_tile, parent_centroid_owned, runtime_status, select_tiles, tile_grid,
 )
 
 MODEL_KEY = "yolo_polyp_v3_c_seed1"
@@ -194,9 +194,22 @@ class YoloPolyp(InstanceSegmentation, CapabilityModel):
         if image.ndim != 3 or image.shape[2] != 3:
             raise ValueError("YOLO polyp requires a three-channel BGR image.")
         height, width = image.shape[:2]
-        tiles_all = tile_grid(height, width)
+        if height <= 0 or width <= 0:
+            raise ValueError("Image dimensions must be positive.")
+
+        padded_bgr, pad_y, pad_x = pad_image_to_min_tile(image)
+        padded_h, padded_w = padded_bgr.shape[:2]
+        tiles_all = tile_grid(padded_h, padded_w)
+
         parent = decode_parent_regions(params.get("parent_regions"), height, width)
-        tiles = select_tiles(tiles_all, parent)
+        if parent is not None and (pad_y > 0 or pad_x > 0):
+            working_parent = np.pad(
+                parent, ((0, pad_y), (0, pad_x)), mode="constant", constant_values=False
+            )
+        else:
+            working_parent = parent
+
+        tiles = select_tiles(tiles_all, working_parent)
         label_id = _active_polyp_label_id(request)
         self._ensure_weights()
         if self._configuration_identity != _configuration():
@@ -204,7 +217,10 @@ class YoloPolyp(InstanceSegmentation, CapabilityModel):
         raw_candidates = []
         with _INFERENCE_LOCK, torch.inference_mode():
             for tile in tiles:
-                crop = image[tile.y0:tile.y0 + 640, tile.x0:tile.x0 + 640]
+                crop = padded_bgr[tile.y0:tile.y0 + 640, tile.x0:tile.x0 + 640]
+                valid_tile_h = max(0, min(640, height - tile.y0))
+                valid_tile_w = max(0, min(640, width - tile.x0))
+
                 result = self._yolo.predict(
                     crop, imgsz=640, conf=0.001, max_det=1000, iou=0.7,
                     retina_masks=True, device=self._configuration_identity[1],
@@ -216,18 +232,35 @@ class YoloPolyp(InstanceSegmentation, CapabilityModel):
                 scores = result.boxes.conf.cpu().numpy()
                 if len(scores) != len(masks):
                     raise RuntimeError("YOLO masks and confidence counts differ.")
+                if len(masks) == 0:
+                    continue
+
+                # Remove predicted pixels in padding before centroid ownership/scoring
+                if valid_tile_h < 640:
+                    masks[:, valid_tile_h:, :] = False
+                if valid_tile_w < 640:
+                    masks[:, :, valid_tile_w:] = False
+                non_empty = masks.any(axis=(1, 2))
+                if not non_empty.any():
+                    continue
+                masks = masks[non_empty]
+                scores = scores[non_empty]
+
                 owned, cx, cy = centre_owned(masks, tile)
-                if parent is not None:
-                    owned &= parent_centroid_owned(parent, cx, cy)
+                if working_parent is not None:
+                    owned &= parent_centroid_owned(working_parent, cx, cy)
                 for index in np.flatnonzero(owned):
                     score = float(scores[index])
                     if not math.isfinite(score) or score < max(0.001, threshold):
                         continue
-                    mask = masks[index]
-                    rle = native_rle(mask, tile.x0, tile.y0, height, width)
+                    full_mask = masks[index]
+                    valid_mask = full_mask[:valid_tile_h, :valid_tile_w]
+                    if not valid_mask.any():
+                        continue
+                    rle = native_rle(valid_mask, tile.x0, tile.y0, height, width)
                     raw_candidates.append({
                         "score": score,
-                        "mask": mask,
+                        "mask": valid_mask,
                         "tile": tile,
                         "rle": rle,
                     })

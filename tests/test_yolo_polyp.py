@@ -86,8 +86,11 @@ def test_invalid_threshold_and_geometry_are_rejected(monkeypatch):
     request = SimpleNamespace(image=np.zeros((640, 640, 3)), label=SimpleNamespace(id=43))
     with pytest.raises(ValueError, match="finite"):
         model.segment_instances(request, {"threshold": float("nan")})
-    request.image = np.zeros((32, 32, 3))
-    with pytest.raises(ValueError, match="smaller"):
+    request.image = np.zeros((0, 0, 3))
+    with pytest.raises(ValueError, match="positive"):
+        model.segment_instances(request)
+    request.image = np.zeros((640, 640))
+    with pytest.raises(ValueError, match="three-channel"):
         model.segment_instances(request)
 
 
