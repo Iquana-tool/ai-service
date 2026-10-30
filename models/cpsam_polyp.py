@@ -442,24 +442,21 @@ def _contour_dicts(
 ) -> list[dict[str, Any]]:
     """Serialize float-normalized polygons in the native image coordinate frame.
 
-    ``Contour.from_binary_mask`` in the pinned toolbox normalizes OpenCV's int32
-    contours in place, truncating every point to zero. Keep its contour schema
-    serializer while normalizing the extracted float points here.
+    Uses the shared ``Contour.from_binary_mask`` conversion and maps tile-relative
+    normalized coordinates back into original-image coordinates.
     """
-    pixel_contours, _hierarchy = cv2.findContours(
-        np.asarray(mask, dtype=np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    tile_height, tile_width = mask.shape[:2]
+    contours = Contour.from_binary_mask(
+        mask,
+        only_return_biggest_contour=False,
+        confidence=score,
+        label_id=label_id,
+        added_by=model_key,
     )
     result = []
-    for pixel_contour in pixel_contours:
-        normalized = pixel_contour.astype(np.float64)
-        normalized[..., 0] = (tile.x0 + normalized[..., 0]) / image_width
-        normalized[..., 1] = (tile.y0 + normalized[..., 1]) / image_height
-        contour = Contour.from_normalized_cv_contour(
-            normalized_cv_contour=normalized,
-            confidence=score,
-            label_id=label_id,
-            added_by=model_key,
-        )
+    for contour in contours:
+        contour.x = [(tile.x0 + x_val * tile_width) / image_width for x_val in contour.x]
+        contour.y = [(tile.y0 + y_val * tile_height) / image_height for y_val in contour.y]
         contour.compute_path(image_width=image_width, image_height=image_height)
         if hasattr(contour, "model_dump"):
             payload = contour.model_dump(mode="json")
