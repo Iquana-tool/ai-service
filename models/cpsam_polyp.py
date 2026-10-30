@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import importlib.util
 import logging
 import math
 import os
@@ -40,7 +41,6 @@ MODEL_KEY = "cpsam_polyp_v3_b_seed17"
 MODEL_NAME = "Cellpose-SAM · Polyp"
 CHECKPOINT_ENV = "IQUANA_CELLPOSE_POLYP_CHECKPOINT"
 CHECKPOINT_SHA256_ENV = "IQUANA_CELLPOSE_POLYP_CHECKPOINT_SHA256"
-DEFAULT_CHECKPOINT = "/home/shivamt/iquana-dev/model-artifacts/cellpose-polyp/cpsam_best"
 EXPECTED_CHECKPOINT_SHA256 = "8d17682741428d0c71b93dc6112de9ff9d6595fc586fe797bf4566423b788eba"
 DEVICE_ENV = "IQUANA_CELLPOSE_POLYP_DEVICE"
 CELLPOSE_VERSION = "4.2.1.1"
@@ -292,8 +292,31 @@ def _device_name_from_environment() -> str:
     return f"cuda:{int(match.group(1) or 0)}"
 
 
+def configured_checkpoint(env: str) -> Path | None:
+    """The checkpoint path set in ``env``, or None. There is no default location."""
+    value = os.environ.get(env, "").strip()
+    return Path(value).expanduser() if value else None
+
+
+def runtime_status(env: str, package: str) -> str:
+    """``ready`` when the optional extra is installed and the checkpoint is configured.
+
+    Evaluated when the model class is defined, i.e. at service start, and synced to the
+    registered model's ``status`` tag, so an unconfigured model is not offered at all
+    instead of failing on its first request. The SHA-256 is still checked on load.
+    """
+    path = configured_checkpoint(env)
+    if importlib.util.find_spec(package) is None or path is None or not path.is_file():
+        return "not_ready"
+    return "ready"
+
+
 def _configured_model_cache_identity() -> tuple[str, str, str]:
-    checkpoint = Path(os.environ.get(CHECKPOINT_ENV, DEFAULT_CHECKPOINT)).expanduser()
+    checkpoint = configured_checkpoint(CHECKPOINT_ENV)
+    if checkpoint is None:
+        raise FileNotFoundError(
+            f"Set {CHECKPOINT_ENV} to the verified cpsam_best artifact; there is no default path."
+        )
     return (
         str(checkpoint.resolve()),
         configured_checkpoint_sha256(),
@@ -464,11 +487,12 @@ class CellposePolyp(InstanceSegmentation, CapabilityModel):
         ),
         classes=[ModelClass(key="polyp", name="Polyp")],
         tags={
-            # Runtime availability is filtered by the registered-model `status`
-            # tag; ModelInfo.status is not copied into discovery tags by the
-            # toolbox registry. Keep this ready-to-serve experimental model
-            # discoverable while its separate maturity remains provisional.
-            "status": "ready",
+            # Discovery filters on the registered-model `status` tag (ModelInfo.status is
+            # not copied into it), so both carry the runtime check.
+            "status": runtime_status(CHECKPOINT_ENV, "cellpose"),
+            # Accepts saved outlines as `parent_regions` (native COCO RLEs) to bound
+            # inference; the backend and frontend read this instead of model keys.
+            "roi_input": "parent_regions",
             "maturity": "provisional",
             "pretrained": "true",
             "finetunable": "false",
@@ -477,7 +501,7 @@ class CellposePolyp(InstanceSegmentation, CapabilityModel):
             "model_version": "v3_B_seed17",
             "default_checkpoint_sha256": EXPECTED_CHECKPOINT_SHA256,
         },
-        status="ready",
+        status=runtime_status(CHECKPOINT_ENV, "cellpose"),
         trainable=False,
         input_contracts=[
             InputContract(
@@ -653,7 +677,7 @@ class CellposePolyp(InstanceSegmentation, CapabilityModel):
             "prediction_metadata": {
                 "model_key": MODEL_KEY,
                 "model_name": MODEL_NAME,
-                "checkpoint": Path(os.environ.get(CHECKPOINT_ENV, DEFAULT_CHECKPOINT)).name,
+                "checkpoint": getattr(configured_checkpoint(CHECKPOINT_ENV), "name", None),
                 "checkpoint_sha256": self._checkpoint_sha256,
                 "device": str(self._cellpose_model.device),
                 "precision": str(self._cellpose_model.net.dtype),

@@ -4,7 +4,7 @@ Registry key: `yolo_polyp_v3_c_seed1`. Displayed beside Cellpose in Instance Seg
 
 Install the optional `yolo-polyp` extra (Ultralytics 8.4.165). The package and pretrained weights use the Ultralytics AGPL-3.0/Enterprise licensing model. Runtime imports are lazy, so unrelated providers do not require this extra.
 
-Set `IQUANA_YOLO_POLYP_CHECKPOINT` to the trained C seed 1 checkpoint, outside Git. Local default: `/home/shivamt/iquana-dev/model-artifacts/yolo-polyp/yolo_C_seed1.pt`. Expected SHA-256: `7e9ac2eec159b4d227d1b8c6553de224a982f420f96b738362ef04bbfad08edf`. Missing/mismatched files fail explicitly; stock weights are not substituted.
+Set `IQUANA_YOLO_POLYP_CHECKPOINT` to the trained C seed 1 checkpoint, outside Git. There is no default path: until the variable points at an existing file (and the extra is installed), the model registers as `not_ready` and is not offered; restart the service after setting it. Expected SHA-256: `7e9ac2eec159b4d227d1b8c6553de224a982f420f96b738362ef04bbfad08edf`. Missing/mismatched files fail explicitly; stock weights are not substituted.
 
 `IQUANA_YOLO_POLYP_DEVICE` defaults to `cuda:0`; set `cpu` for an explicit CPU run. Restart the worker after changing checkpoint/device settings. Each worker serializes YOLO inference and reuses its loaded network.
 

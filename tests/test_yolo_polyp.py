@@ -8,6 +8,12 @@ from pycocotools import mask as mask_utils
 from models import yolo_polyp as yolo
 
 
+@pytest.fixture(autouse=True)
+def _configured_checkpoint(tmp_path, monkeypatch):
+    # There is no default checkpoint path; the fakes below never read the file.
+    monkeypatch.setenv(yolo.CHECKPOINT_ENV, str(tmp_path / "yolo_C_seed1.pt"))
+
+
 def fake_model(monkeypatch, masks, scores):
     model = yolo.YoloPolyp()
     calls = []
@@ -119,3 +125,10 @@ def test_post_merge_suppression_removes_nested_and_overlapping_duplicates_withou
     kept_scores = [inst["score"] for inst in meta["instances"]]
     assert kept_scores == pytest.approx([0.8, 0.75])
 
+
+
+def test_unconfigured_checkpoint_has_no_default_path(monkeypatch):
+    monkeypatch.delenv(yolo.CHECKPOINT_ENV, raising=False)
+    with pytest.raises(FileNotFoundError, match=yolo.CHECKPOINT_ENV):
+        yolo._configuration()
+    assert yolo.YoloPolyp.model_info.tags["roi_input"] == "parent_regions"

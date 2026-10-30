@@ -22,9 +22,9 @@ Configure `IQUANA_CELLPOSE_POLYP_CHECKPOINT` to the fine-tuned `cpsam_best`
 artifact, and set `IQUANA_CELLPOSE_POLYP_CHECKPOINT_SHA256` to its expected
 64-character hexadecimal SHA-256. The SHA setting defaults to the recorded
 provisional checkpoint digest below; replacements must set both path and SHA.
-The default development path is
-`/home/shivamt/iquana-dev/model-artifacts/cellpose-polyp/cpsam_best`. The file
-has default SHA-256
+There is no default path: until the variable points at an existing file (and the
+extra is installed), the model registers as `not_ready` and is not offered. Restart
+the service after setting it. The file has default SHA-256
 `8d17682741428d0c71b93dc6112de9ff9d6595fc586fe797bf4566423b788eba`; a missing
 or mismatched file fails with a clear error. The provider builds the pinned
 Cellpose 4.2.1.1 CPSAM architecture directly and strictly loads the complete

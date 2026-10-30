@@ -13,11 +13,29 @@ import models.cpsam_polyp as cpsam
 from models.base import validate_and_normalize_params
 
 
-def test_provisional_provider_is_in_ready_catalog():
+def test_provisional_provider_declares_maturity_and_roi_input():
     info = cpsam.CellposePolyp.model_info
-    assert info.status == "ready"
-    assert info.tags["status"] == "ready"
+    assert info.tags["status"] == info.status
     assert info.tags["maturity"] == "provisional"
+    assert info.tags["roi_input"] == "parent_regions"
+
+
+def test_runtime_status_needs_extra_and_configured_checkpoint(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "cpsam_best"
+    monkeypatch.delenv(cpsam.CHECKPOINT_ENV, raising=False)
+    assert cpsam.configured_checkpoint(cpsam.CHECKPOINT_ENV) is None
+    assert cpsam.runtime_status(cpsam.CHECKPOINT_ENV, "numpy") == "not_ready"
+    monkeypatch.setenv(cpsam.CHECKPOINT_ENV, str(checkpoint))
+    assert cpsam.runtime_status(cpsam.CHECKPOINT_ENV, "numpy") == "not_ready"  # file missing
+    checkpoint.write_bytes(b"x")
+    assert cpsam.runtime_status(cpsam.CHECKPOINT_ENV, "numpy") == "ready"
+    assert cpsam.runtime_status(cpsam.CHECKPOINT_ENV, "no_such_package_xyz") == "not_ready"
+
+
+def test_unconfigured_checkpoint_has_no_default_path(monkeypatch):
+    monkeypatch.delenv(cpsam.CHECKPOINT_ENV, raising=False)
+    with pytest.raises(FileNotFoundError, match=cpsam.CHECKPOINT_ENV):
+        cpsam._configured_model_cache_identity()
 
 
 def test_reference_tile_grid_and_half_open_centroid_ownership():

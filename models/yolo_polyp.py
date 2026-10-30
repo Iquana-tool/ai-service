@@ -19,8 +19,8 @@ from models.base import CapabilityModel, InstanceSegmentation
 from models.registry import register_model
 from models.cpsam_polyp import (
     _active_polyp_label_id, _contour_dicts, _device_from_name,
-    _sha256, centre_owned, decode_parent_regions, native_rle,
-    parent_centroid_owned, select_tiles, tile_grid,
+    _sha256, centre_owned, configured_checkpoint, decode_parent_regions, native_rle,
+    parent_centroid_owned, runtime_status, select_tiles, tile_grid,
 )
 
 MODEL_KEY = "yolo_polyp_v3_c_seed1"
@@ -28,7 +28,6 @@ MODEL_NAME = "YOLO11m-seg · Polyp"
 CHECKPOINT_ENV = "IQUANA_YOLO_POLYP_CHECKPOINT"
 DEVICE_ENV = "IQUANA_YOLO_POLYP_DEVICE"
 EXPECTED_CHECKPOINT_SHA256 = "7e9ac2eec159b4d227d1b8c6553de224a982f420f96b738362ef04bbfad08edf"
-DEFAULT_CHECKPOINT = "/home/shivamt/iquana-dev/model-artifacts/yolo-polyp/yolo_C_seed1.pt"
 ULTRALYTICS_VERSION = "8.4.165"
 DEFAULT_THRESHOLD = 0.25
 _LOAD_LOCK = threading.Lock()
@@ -115,7 +114,10 @@ def suppress_duplicate_instances(
 
 
 def _configuration():
-    path = Path(os.environ.get(CHECKPOINT_ENV, DEFAULT_CHECKPOINT)).expanduser().resolve()
+    checkpoint = configured_checkpoint(CHECKPOINT_ENV)
+    if checkpoint is None:
+        raise FileNotFoundError(f"Set {CHECKPOINT_ENV} to the YOLO C seed 1 checkpoint; there is no default path.")
+    path = checkpoint.resolve()
     device = os.environ.get(DEVICE_ENV, "cuda:0").strip().lower()
     if device == "cuda":
         device = "cuda:0"
@@ -131,10 +133,11 @@ class YoloPolyp(InstanceSegmentation, CapabilityModel):
         description="Trained YOLO11m-seg C seed 1 polyp masks, using native 640/128 tiles.",
         usage_tip="Run on selected saved coral outlines or explicitly choose Whole image.",
         classes=[ModelClass(key="polyp", name="Polyp")],
-        tags={"status": "ready", "maturity": "provisional", "pretrained": "true",
+        tags={"status": runtime_status(CHECKPOINT_ENV, "ultralytics"), "roi_input": "parent_regions",
+              "maturity": "provisional", "pretrained": "true",
               "finetunable": "false", "architecture": "YOLO11m-seg", "model_version": "v3_C_seed1",
               "default_checkpoint_sha256": EXPECTED_CHECKPOINT_SHA256},
-        status="ready", trainable=False,
+        status=runtime_status(CHECKPOINT_ENV, "ultralytics"), trainable=False,
         input_contracts=[InputContract(
             task="instance-segmentation",
             conditioning=ConditioningSpec(kind="none", user_selectable_count=False),
