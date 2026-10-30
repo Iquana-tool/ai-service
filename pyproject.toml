@@ -41,6 +41,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+yolo-polyp = [
+    "ultralytics==8.4.165",
+]
+cellpose-polyp = [
+    "cellpose==4.2.1.1",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
