@@ -38,6 +38,31 @@ calls, unchanged.
 `GET /health` and `POST /config` are also mounted at the root, for the launcher and the
 backend's admin page respectively.
 
+### Concept segmentation with hierarchy
+
+The backend resolves a label's saved parent instances and may send the reserved
+`parameters.hierarchy_regions` list to any of the three concept surfaces
+(`instance-segmentation`, `instance-suggestion`, `cross-image-suggestion`). Each entry
+contains a saved `parent_id` and an original-image COCO RLE `mask`. The service consumes
+this field before provider parameter validation, focuses one crop per parent, clips
+predictions to that parent, and restores contours and RLEs to the original image size.
+Missing hierarchy parameters preserve existing whole-image/legacy provider behavior;
+an explicitly empty or invalid region list returns 422 rather than running image-wide.
+
+Same-image positive and negative exemplars remain available across parents through a
+reference context composited beside each target crop. Cross-image exemplars retain their
+source images. Text, embeddings, and other contracts without spatial exemplars run directly
+on the focused crop; the provider's declared conditioning requirements still apply.
+Nested provider contours are flattened and each class's geometry is restored independently.
+Providers that already own the parent loop advertise the tag
+`hierarchy_input: parent_regions`; the service passes all parent masks to that
+instance-suggestion provider once, preserving native reference-sharing behavior.
+
+Returned contours include the saved `parent_id`. Their `source_instance_id` values are
+prefixed per parent to disambiguate crop-local IDs; metadata retains exact full-image
+instance RLEs and per-parent diagnostics. The wrapper does not load weights, change model
+parameter contracts, or add provider-specific registry keys.
+
 ---
 
 ## The model interface

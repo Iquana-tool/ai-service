@@ -11,6 +11,7 @@ from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.http.services import InstanceSuggestionRequest
 
 from app.state import MODEL_REGISTRY
+from app.hierarchy_inference import predict_concept
 
 logger = getLogger(__name__)
 router = APIRouter()
@@ -28,9 +29,15 @@ async def infer_instances(request: InstanceSuggestionRequest):
     params = dict(request.parameters) if getattr(request, "parameters", None) else {}
     params["task"] = "instance-suggestion"
     try:
-        masklets, scores = model.predict([request], params)
+        tags = (MODEL_REGISTRY.client.get_registered_model(request.model_registry_key).tags
+                if "hierarchy_regions" in params else None)
+        prediction = predict_concept(model, request, params, tags)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    if isinstance(prediction, dict) and "contours" in prediction:
+        return {"success": True, "message": f"Detected {len(prediction['contours'])} objects for user {request.user_id}",
+                "result": prediction["contours"], "prediction_metadata": prediction["prediction_metadata"]}
+    masklets, scores = prediction
     result = []
     for masklet, score in zip(masklets, scores):
         try:

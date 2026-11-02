@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, status
 from iquana_toolbox.schemas.networking.http.services import InstanceSegmentationRequest
 
 from app.state import MODEL_REGISTRY
+from app.hierarchy_inference import predict_concept
 from util.validate_model import validate_model
 
 router = APIRouter()
@@ -34,7 +35,9 @@ async def inference(request: InstanceSegmentationRequest) -> Any:
     params = dict(request.parameters) if getattr(request, "parameters", None) else {}
     params["task"] = "instance-segmentation"
     try:
-        prediction = model.predict(request, params)
+        tags = (MODEL_REGISTRY.client.get_registered_model(request.model_registry_key).tags
+                if "hierarchy_regions" in params else None)
+        prediction = predict_concept(model, request, params, tags)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     contours, prediction_metadata, has_metadata = _prediction_parts(prediction)
@@ -55,7 +58,9 @@ async def run_inference(request: InstanceSegmentationRequest):
     params = dict(request.parameters) if getattr(request, "parameters", None) else {}
     params["task"] = "instance-segmentation"
     try:
-        prediction = model.predict(request, params)
+        tags = (MODEL_REGISTRY.client.get_registered_model(request.model_registry_key).tags
+                if "hierarchy_regions" in params else None)
+        prediction = predict_concept(model, request, params, tags)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     contours, prediction_metadata, has_metadata = _prediction_parts(prediction)
