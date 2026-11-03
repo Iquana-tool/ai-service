@@ -236,12 +236,16 @@ class Propagation(TaskCapability):
 
 
 def validate_and_normalize_params(
-    contract: InputContract | None, params: dict[str, Any] | None
+    contract: InputContract | None,
+    params: dict[str, Any] | None,
+    *,
+    passthrough_params: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Validate and normalize inference parameters against an :class:`InputContract`.
 
     - If *contract* is None, returns a shallow copy of *params*.
-    - Rejects unknown parameter keys (ignoring the routing key ``'task'``).
+    - Rejects unknown parameter keys (ignoring the routing key ``'task'`` and
+      model-declared passthrough fields).
     - Fills missing/None values with declared defaults.
     - Validates type (bool, int, float, str).
     - Validates options if declared.
@@ -253,12 +257,13 @@ def validate_and_normalize_params(
 
     raw_params = dict(params or {})
     declared_by_key = {param.key: param for param in contract.parameters}
+    passthrough_keys = set(passthrough_params)
 
     # Reject unknown parameter keys (ignoring the routing key 'task')
     for key in raw_params:
         if key == "task":
             continue
-        if key not in declared_by_key:
+        if key not in declared_by_key and key not in passthrough_keys:
             raise ValueError(
                 f"Unknown parameter '{key}' for task '{contract.task}'. "
                 f"Declared parameters: {sorted(declared_by_key.keys())}"
@@ -267,6 +272,10 @@ def validate_and_normalize_params(
     normalized: dict[str, Any] = {}
     if "task" in raw_params:
         normalized["task"] = raw_params["task"]
+
+    for key in passthrough_keys:
+        if key in raw_params:
+            normalized[key] = raw_params[key]
 
     for key, spec in declared_by_key.items():
         if key in raw_params and raw_params[key] is not None:
@@ -548,12 +557,20 @@ class CapabilityModel(BaseModel):
 
     # -- MLflow entry point -------------------------------------------------- #
     def predict(self, context: Any, model_input, params: dict[str, Any] | None = None):
-        params = dict(params or {})
         request = model_input[0] if isinstance(model_input, list) else model_input
+        request_params = getattr(request, "parameters", None)
+        params = {
+            **(dict(request_params) if isinstance(request_params, dict) else {}),
+            **dict(params or {}),
+        }
         task = self._resolve_task(request, params)
         contract = self.get_input_contract(task.name)
         validate_request_conditioning(contract, request)
-        normalized_params = validate_and_normalize_params(contract, params)
+        normalized_params = validate_and_normalize_params(
+            contract,
+            params,
+            passthrough_params=getattr(self, "_passthrough_input_params", ()),
+        )
         # After validation, so a request that is going to be rejected never pays
         # for a weight load, and before dispatch, so every handler can assume its
         # weights exist without each one guarding for itself.

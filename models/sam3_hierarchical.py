@@ -71,6 +71,7 @@ class SAM3Hierarchical(InstanceSuggestion, CapabilityModel):
             "finetunable": "false",
             "domain": "general",
             "publisher": "meta-ai",
+            "hierarchy_input": "parent_regions",
         },
         status="ready",
         trainable=False,
