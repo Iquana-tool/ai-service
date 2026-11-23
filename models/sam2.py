@@ -160,31 +160,35 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
             trainable=False,
             prompt_types_supported=["point", "box", "polygon"],
             refinement_supported=True,
-            input_contracts=[
-                InputContract(
-                    task="propagation",
-                    conditioning=ConditioningSpec(kind="none", user_selectable_count=False),
-                    parameters=[
-                        HyperParameter(
-                            key="presence_threshold", label="Presence threshold", type="float",
-                            default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
-                            description="Below this, the object counts as absent from a slice; "
-                                        "two such slices in a row end the propagation there.",
-                        ),
-                    ],
-                ),
-                InputContract(
-                    task="prompted-segmentation",
-                    conditioning=ConditioningSpec(
-                        kind="none",
-                        user_selectable_count=False,
-                    ),
-                    # SAM2 has no user-exposed inference tunables beyond the
-                    # geometric prompt itself.
-                    parameters=[],
-                ),
-            ],
+            input_contracts=self._input_contracts(),
         )
+
+    def _input_contracts(self) -> list[InputContract]:
+        """The contracts in ``model_info``; a subclass with other tasks or parameters overrides it."""
+        return [
+            InputContract(
+                task="propagation",
+                conditioning=ConditioningSpec(kind="none", user_selectable_count=False),
+                parameters=[
+                    HyperParameter(
+                        key="presence_threshold", label="Presence threshold", type="float",
+                        default_value=0.5, min_value=0.0, max_value=1.0, step=0.05,
+                        description="Below this, the object counts as absent from a slice; "
+                                    "two such slices in a row end the propagation there.",
+                    ),
+                ],
+            ),
+            InputContract(
+                task="prompted-segmentation",
+                conditioning=ConditioningSpec(
+                    kind="none",
+                    user_selectable_count=False,
+                ),
+                # SAM2 has no user-exposed inference tunables beyond the
+                # geometric prompt itself.
+                parameters=[],
+            ),
+        ]
 
     def _load_weights(self) -> None:
         """(Re)build the HF processor + model from the checkpoint on ``self.device``."""
@@ -305,7 +309,7 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
     ) -> list[Contour]:
         """Segment one prompted object; return it as a (single) candidate contour."""
         previous_mask = request.previous_mask.mask if request.previous_mask else None
-        mask, score = self._segment(request.image, request.prompts, previous_mask)
+        mask, score = self._segment(request.image, request.prompts, previous_mask, **self._model_kwargs(params))
         contour = Contour.from_binary_mask(
             binary_mask=mask,
             only_return_biggest_contour=True,  # one prompted object per request
@@ -316,7 +320,11 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
         # candidate list the backend validates downstream.
         return [contour] if contour is not None else []
 
-    def _segment(self, image, prompts: Prompts, previous_mask=None) -> tuple[np.ndarray, float]:
+    def _model_kwargs(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Extra model inputs taken from the request's parameters (none for SAM 2)."""
+        return {}
+
+    def _segment(self, image, prompts: Prompts, previous_mask=None, **model_kwargs) -> tuple[np.ndarray, float]:
         """Run SAM2 on a single image with point/box prompts; return (mask, score)."""
         # 1. Prepare prompts (coords are normalised in the request; scale to pixels).
         point_coords = None  # Image x Object x point x coords
@@ -378,14 +386,15 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
 
         # 3. Inference.
         with torch.no_grad():
-            outputs = self.model(**inputs, input_masks=dense_mask, multimask_output=True)
+            outputs = self.model(**inputs, input_masks=dense_mask, multimask_output=True, **model_kwargs)
 
         # 4. Post-process: upscale to original size and pick the best-scoring mask.
+        # Reshaped rather than squeezed, so a model that returns one mask works too.
         batches = self.processor.post_process_masks(outputs.pred_masks.cpu(), inputs["original_sizes"].cpu())
-        scores = outputs.iou_scores.cpu().numpy().squeeze()
+        scores = outputs.iou_scores.cpu().numpy().reshape(-1)
         best_index = int(np.argmax(scores))
 
-        masks = batches[0].squeeze()
+        masks = batches[0].reshape(-1, *batches[0].shape[-2:])
         final_mask = masks[best_index].numpy().astype(np.uint8) * 255
         return final_mask, float(scores[best_index])
 
