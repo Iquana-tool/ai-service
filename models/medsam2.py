@@ -230,7 +230,7 @@ def _load_into(model: torch.nn.Module, state_dict: dict[str, torch.Tensor]) -> N
     unexpected = [key for key in unexpected if not any(re.search(p, key) for p in ignored)]
     if missing or unexpected:
         raise RuntimeError(
-            f"MedSAM2 checkpoint does not fit {type(model).__name__}: "
+            f"Original SAM 2 checkpoint does not fit {type(model).__name__}: "
             f"missing={missing[:5]} ({len(missing)}), unexpected={unexpected[:5]} ({len(unexpected)})"
         )
 

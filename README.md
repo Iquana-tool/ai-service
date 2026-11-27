@@ -29,7 +29,7 @@ calls, unchanged.
 
 | Prefix / task | What it does | Model |
 |---|---|---|
-| `/prompted-segmentation` | Turns a point, box, polygon or freedraw prompt into an outline | SAM 2, SAM 3, MedSAM2 |
+| `/prompted-segmentation` | Turns a point, box, polygon or freedraw prompt into an outline | SAM 2, SAM 3, MedSAM2, UnSAMv2 |
 | `/instance-suggestion` | Suggests further instances resembling the annotated ones | SAM 3, MedSAM3 |
 | `/instance-segmentation` | Full-image instance segmentation, plus fine-tuning | Mask2Former, M2C (SAM 3), Choroidalyzer (OCT) |
 | `/embed` | Whole-image (CLS) and region descriptors | DINOv3 |
@@ -140,6 +140,7 @@ models/
 ├── registry.py       # @register_model, in-tree discovery, plugin loading
 ├── sam2.py, sam3.py, m2c.py, mask2former.py, dinov3_embedder.py, choroidalyzer.py
 ├── medsam2.py, medsam3.py  # SAM 2 / SAM 3 medical fine-tunes, converted from their original checkpoints
+├── unsamv2.py            # SAM 2.1-S with a granularity prompt (part vs whole), converted from its checkpoint
 ├── backbones/        # DINOv3 backbone
 ├── dataloaders.py, mask2former_dataset.py
 └── concat_ops.py, embedding_ops.py
