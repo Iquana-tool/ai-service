@@ -29,7 +29,7 @@ calls, unchanged.
 
 | Prefix / task | What it does | Model |
 |---|---|---|
-| `/prompted-segmentation` | Turns a point, box, polygon or freedraw prompt into an outline | SAM 2, SAM 3, MedSAM2, MedSAM3 |
+| `/prompted-segmentation` | Turns a point, box, polygon or freedraw prompt into an outline | SAM 2, SAM 3, MedSAM2 |
 | `/instance-suggestion` | Suggests further instances resembling the annotated ones | SAM 3, MedSAM3 |
 | `/instance-segmentation` | Full-image instance segmentation, plus fine-tuning | Mask2Former, Choroidalyzer (OCT) |
 | `/embed` | Whole-image (CLS) and region descriptors | DINOv3 |
