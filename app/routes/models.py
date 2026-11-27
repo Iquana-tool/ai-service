@@ -43,7 +43,7 @@ def _registered_names_for_task(registry: MLFlowModelRegistry, task_name: str, *,
     return list(by_name)
 
 
-def _full_model_info(registry_key: str) -> dict:
+def _full_model_info(registry_key: str, registry: MLFlowModelRegistry | None = None) -> dict:
     """A model's complete ``model_info`` from its logged artifact metadata.
 
     ``register_model`` stores ``ModelInfo.model_dump()`` as the logged model's
@@ -53,7 +53,17 @@ def _full_model_info(registry_key: str) -> dict:
     try:
         info = mlflow.models.get_model_info(f"models:/{registry_key}/latest")
         if info.metadata:
-            return info.metadata
+            metadata = dict(info.metadata)
+            if registry is not None:
+                try:
+                    registered = registry.client.get_registered_model(registry_key)
+                    if registered.tags.get("display_name"):
+                        metadata["name"] = registered.tags["display_name"]
+                    if registered.description:
+                        metadata["description"] = registered.description
+                except Exception:
+                    logger.warning("Could not refresh display metadata for '%s'.", registry_key)
+            return metadata
         logger.warning("Model '%s' has no artifact metadata; returning stub.", registry_key)
     except Exception:
         logger.exception("Failed to read artifact metadata for model '%s'.", registry_key)
@@ -70,7 +80,7 @@ def build_task_model_routers(
     def _list(ready_only: bool) -> list[dict]:
         mlflow.set_tracking_uri(MLFLOW_URL)
         names = _registered_names_for_task(registry, task_name, ready_only=ready_only)
-        return [_full_model_info(name) for name in names]
+        return [_full_model_info(name, registry) for name in names]
 
     @router.get("/models/all", tags=["models"])
     async def list_models():
@@ -99,7 +109,7 @@ def build_task_model_routers(
         return {
             "success": True,
             "message": "Retrieved model information.",
-            "result": _full_model_info(model_registry_key),
+            "result": _full_model_info(model_registry_key, registry),
         }
 
     @session_router.get("/models/{model_registry_key}/preload", tags=["models"])
