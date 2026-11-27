@@ -247,6 +247,7 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
             "domain": "general",
             "publisher": "facebook",
             "architecture": "Mask2Former",
+            "hierarchy_input": "whole_image",
         },
         status="ready",
         trainable=True,
@@ -408,13 +409,17 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
                 )
                 inputs = self._move_inputs_to_device(inputs, self._device())
                 outputs = self._model(**inputs)
+                cpu_outputs = type(outputs)(**{
+                    k: v.to("cpu") if isinstance(v, torch.Tensor) else v
+                    for k, v in outputs.items()
+                })
                 processed_batch = self._processor.post_process_instance_segmentation(
-                    outputs,
+                    cpu_outputs,
                     target_sizes=[sample.image.shape[:2] for sample in samples],
                     threshold=_DEFAULT_INSTANCE_THRESHOLD,
                 )
                 ap_processed_batch = self._processor.post_process_instance_segmentation(
-                    outputs,
+                    cpu_outputs,
                     target_sizes=[sample.image.shape[:2] for sample in samples],
                     threshold=0.0,
                     return_binary_maps=True,
@@ -608,13 +613,17 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
                 ):
                     raise TypeError("Model class indices must be integers.")
                 model_label_id = int(raw_model_label_id)
-                database_label_id = self._label_mapping.model_to_database[model_label_id]
+                if requested_label_id is not None:
+                    # Match against database_to_model mapping (handles dataset aliases)
+                    if self._label_mapping.database_to_model.get(requested_label_id) != model_label_id:
+                        continue
+                    database_label_id = requested_label_id
+                else:
+                    database_label_id = self._label_mapping.model_to_database[model_label_id]
             except (KeyError, TypeError, ValueError) as exc:
                 raise RuntimeError(
                     "Mask2Former prediction referenced an unknown model class index."
                 ) from exc
-            if requested_label_id is not None and database_label_id != requested_label_id:
-                continue
             if score < threshold:
                 continue
             binary_mask = (segmentation == segment["id"]).astype(np.uint8)
@@ -715,6 +724,9 @@ class Mask2Former(InstanceSegmentation, CapabilityModel):
                 logger.info("Mask2Former epoch %d/%d finished with loss %.6f.", epoch, epochs, average_loss)
             if processed_batches == 0:
                 raise RuntimeError("Mask2Former training processed zero batches.")
+            del optimizer
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             if validation_indices:
                 validation_metrics = self._evaluate_validation(
                     validation_dataloader, label_mapping, is_cancelled

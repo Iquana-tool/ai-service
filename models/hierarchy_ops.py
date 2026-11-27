@@ -136,13 +136,14 @@ def paste_back(
     crop: FocusCrop,
     image_hw: tuple[int, int],
     min_inside_frac: float = 0.5,
-    max_parent_iou: float = 0.8,
+    max_parent_iou: float | None = 0.8,
 ) -> tuple[list[np.ndarray], list[int]]:
     """Map crop-space detections to full-image masks clipped to the parent.
 
     A detection is dropped when less than ``min_inside_frac`` of it lies on the parent (it
     latched onto the blurred surroundings) or when it is essentially the parent itself
     (IoU above ``max_parent_iou`` -- SAM 3 re-segmenting the fragment, not a child).
+    If ``max_parent_iou`` is None, IoU with parent is not thresholded (e.g. for surfaces).
     Returns the full-size boolean masks and their indices into ``crop_masks``.
     """
     y0, y1, x0, x1 = crop.box
@@ -158,7 +159,7 @@ def paste_back(
         area = int(clipped.sum())
         if area == 0:
             continue
-        if parent_area and area / (parent_area + int(mask.sum()) - area) > max_parent_iou:
+        if max_parent_iou is not None and parent_area and area / (parent_area + int(mask.sum()) - area) > max_parent_iou:
             continue
         full = np.zeros(image_hw, dtype=bool)
         full[y0:y1, x0:x1] = clipped

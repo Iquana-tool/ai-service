@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 
 from models import mask2former as mask2former_module
 from models.mask2former import (
@@ -104,17 +105,25 @@ def test_validation_uses_thresholded_instances_and_unions_database_labels(
 ) -> None:
     """Validation must score decoded instances, not a semantic argmax map."""
 
+    class FakeModelOutputs(dict):
+        """Simulate HuggingFace ModelOutput mappings with tensors and metadata."""
+
     class FakeModel:
         def eval(self) -> "FakeModel":
             return self
 
-        def __call__(self, **_inputs: object) -> object:
-            return object()
+        def __call__(self, **_inputs: object) -> FakeModelOutputs:
+            return FakeModelOutputs(
+                pred_logits=torch.zeros((1, 3, 2)),
+                pred_masks=torch.zeros((1, 3, 4, 4)),
+                extra_metadata="preserved_metadata",
+            )
 
     class FakeProcessor:
         def __init__(self) -> None:
             self.thresholds: list[float] = []
             self.semantic_calls = 0
+            self.post_process_outputs: list[object] = []
             self._segmentation = np.array(
                 [
                     [10, 10, 0, 0],
@@ -140,13 +149,14 @@ def test_validation_uses_thresholded_instances_and_unions_database_labels(
 
         def post_process_instance_segmentation(
             self,
-            _outputs: object,
+            outputs: object,
             *,
             target_sizes: list[tuple[int, int]],
             threshold: float,
             return_binary_maps: bool = False,
         ) -> list[dict[str, object]]:
             assert target_sizes == [(3, 4)]
+            self.post_process_outputs.append(outputs)
             self.thresholds.append(threshold)
             selected_segments = [
                 segment for segment in self._segments if segment["score"] >= threshold
@@ -205,6 +215,15 @@ def test_validation_uses_thresholded_instances_and_unions_database_labels(
     validation_metrics = model._evaluate_validation(
         [[sample]], label_mapping, is_cancelled=lambda: False
     )
+
+    assert len(processor.post_process_outputs) == 2
+    for outputs in processor.post_process_outputs:
+        assert isinstance(outputs, FakeModelOutputs)
+        assert outputs["extra_metadata"] == "preserved_metadata"
+        assert isinstance(outputs["pred_logits"], torch.Tensor)
+        assert outputs["pred_logits"].device == torch.device("cpu")
+        assert isinstance(outputs["pred_masks"], torch.Tensor)
+        assert outputs["pred_masks"].device == torch.device("cpu")
 
     predicted = captured["predicted"][0]
     target = captured["target"][0]

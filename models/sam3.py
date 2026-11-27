@@ -30,7 +30,7 @@ from iquana_toolbox.schemas.prompts import Prompts
 from iquana_toolbox.schemas.training import HyperParameter
 from models.registry import register_model
 
-from models import concat_ops
+from models import concat_ops, hierarchy_ops
 from models.base import (
     CapabilityModel,
     CrossImageSuggestion,
@@ -193,11 +193,14 @@ class SAM3(InstanceSuggestion, PromptedSegmentation, CrossImageSuggestion, Capab
         # Positive exemplar masks -> boxes with label 1; negative exemplars -> label 0.
         # SAM 3's geometry encoder uses these labels to push/pull the concept, so
         # dropping negatives discards a signal the caller explicitly provided.
-        bboxes = request.get_bboxes(format="xyxy", relative_coordinates=False)
+        bboxes = [hierarchy_ops.bbox_xyxy(mask) for mask in request.positive_exemplar_masks]
+        bboxes = [box for box in bboxes if box is not None]
         labels = [1] * len(bboxes)
-        for negative in request.negative_exemplars or []:
-            bboxes.append(negative.get_as_bbox(relative_coords=False))
-            labels.append(0)
+        for negative in request.negative_exemplar_masks:
+            box = hierarchy_ops.bbox_xyxy(negative)
+            if box is not None:
+                bboxes.append(box)
+                labels.append(0)
 
         # Labels must be a LongTensor of shape (batch, num_boxes); an optional
         # concept label adds a text prompt, otherwise the "visual" token is used.
