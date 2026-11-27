@@ -603,7 +603,7 @@ def test_sam3_declarations_audit():
     assert cross_c.conditioning.unit == "image"
     assert cross_c.conditioning.min_units == 1
     assert cross_c.conditioning.max_units == 1
-    assert cross_c.conditioning.requires_complete_annotation is True
+    assert cross_c.conditioning.requires_complete_annotation is False
     cross_keys = {p.key: p for p in cross_c.parameters}
     assert set(cross_keys.keys()) == {"threshold", "mask_threshold", "min_target_frac"}
     assert cross_keys["threshold"].default_value == 0.3

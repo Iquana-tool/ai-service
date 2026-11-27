@@ -128,8 +128,12 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
     # by ``_ensure_video_weights`` when a stack is first propagated.
     _core_weights = ("model", "processor")
 
+    #: The registered variants this class builds. A subclass serving other
+    #: checkpoints (MedSAM2) swaps in its own table.
+    VARIANTS: dict[str, dict] = _VARIANTS
+
     def __init__(self, registry_key: str, device: str = "auto"):
-        cfg = _VARIANTS[registry_key]
+        cfg = self.VARIANTS[registry_key]
         self.device = device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
         self.checkpoint = cfg["checkpoint"]
 
@@ -137,8 +141,11 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
             registry_key=registry_key,
             name=cfg["name"],
             description=cfg["description"],
-            usage_tip="Provide point, box and/or polygon prompts; supports iterative refinement using the "
-                      "previous mask. Polygons are fed to SAM2 as a dense mask prompt.",
+            usage_tip=cfg.get(
+                "usage_tip",
+                "Provide point, box and/or polygon prompts; supports iterative refinement using the "
+                "previous mask. Polygons are fed to SAM2 as a dense mask prompt.",
+            ),
             tags={
                 "status": "ready",
                 "pretrained": "true",
@@ -147,6 +154,7 @@ class SAM2Prompted(PromptedSegmentation, Propagation, CapabilityModel):
                 "inference_speed": cfg["inference_speed"],
                 "accuracy_level": cfg["accuracy_level"],
                 "requires_gpu": cfg["requires_gpu"],
+                **cfg.get("tags", {}),
             },
             status="ready",
             trainable=False,
