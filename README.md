@@ -29,7 +29,7 @@ calls, unchanged.
 
 | Prefix / task | What it does | Model |
 |---|---|---|
-| `/prompted-segmentation` | Turns a point, box, polygon or freedraw prompt into an outline | SAM 2, SAM 3, MedSAM2, MedSAM3 |
+| `/prompted-segmentation` | Turns a point, box, polygon or freedraw prompt into an outline | SAM 2, SAM 3, MedSAM2, UnSAMv2 |
 | `/instance-suggestion` | Suggests further instances resembling the annotated ones | SAM 3, MedSAM3 |
 | `/instance-segmentation` | Full-image instance segmentation, plus fine-tuning | Mask2Former, Choroidalyzer (OCT) |
 | `/embed` | Whole-image (CLS) and region descriptors | DINOv3 |
@@ -37,6 +37,31 @@ calls, unchanged.
 
 `GET /health` and `POST /config` are also mounted at the root, for the launcher and the
 backend's admin page respectively.
+
+### Concept segmentation with hierarchy
+
+The backend resolves a label's saved parent instances and may send the reserved
+`parameters.hierarchy_regions` list to any of the three concept surfaces
+(`instance-segmentation`, `instance-suggestion`, `cross-image-suggestion`). Each entry
+contains a saved `parent_id` and an original-image COCO RLE `mask`. The service consumes
+this field before provider parameter validation, focuses one crop per parent, clips
+predictions to that parent, and restores contours and RLEs to the original image size.
+Missing hierarchy parameters preserve existing whole-image/legacy provider behavior;
+an explicitly empty or invalid region list returns 422 rather than running image-wide.
+
+Same-image positive and negative exemplars remain available across parents through a
+reference context composited beside each target crop. Cross-image exemplars retain their
+source images. Text, embeddings, and other contracts without spatial exemplars run directly
+on the focused crop; the provider's declared conditioning requirements still apply.
+Nested provider contours are flattened and each class's geometry is restored independently.
+Providers that already own the parent loop advertise the tag
+`hierarchy_input: parent_regions`; the service passes all parent masks to that
+instance-suggestion provider once, preserving native reference-sharing behavior.
+
+Returned contours include the saved `parent_id`. Their `source_instance_id` values are
+prefixed per parent to disambiguate crop-local IDs; metadata retains exact full-image
+instance RLEs and per-parent diagnostics. The wrapper does not load weights, change model
+parameter contracts, or add provider-specific registry keys.
 
 ---
 
@@ -115,6 +140,7 @@ models/
 ├── registry.py       # @register_model, in-tree discovery, plugin loading
 ├── sam2.py, sam3.py, mask2former.py, dinov3_embedder.py, choroidalyzer.py
 ├── medsam2.py, medsam3.py  # SAM 2 / SAM 3 medical fine-tunes, converted from their original checkpoints
+├── unsamv2.py            # SAM 2.1-S with a granularity prompt (part vs whole), converted from its checkpoint
 ├── backbones/        # DINOv3 backbone
 ├── dataloaders.py, mask2former_dataset.py
 └── concat_ops.py, embedding_ops.py
@@ -156,6 +182,51 @@ Run the tests with `uv run pytest tests/ -q`.
 ## Configuration
 
 Read from the environment via a project `.env` (see `paths.py`).
+
+### Polyp model checkpoints from Hugging Face
+
+Cellpose-SAM and YOLO polyp weights are hosted in the private
+[`iquana/iquana-cellpose-sam-polyp`](https://huggingface.co/iquana/iquana-cellpose-sam-polyp)
+and [`iquana/iquana-yolo-polyp`](https://huggingface.co/iquana/iquana-yolo-polyp)
+repositories. The service loads local files; do not put HF URLs in the checkpoint
+path variables. Run this setup once before starting the service:
+
+```bash
+# Use the deployment's compatible AI-service environment, with the
+# cellpose-polyp and yolo-polyp extras installed.
+# Authenticate with read access to both repositories: HF_ACCESS_TOKEN,
+# HF_TOKEN, or an existing `hf auth login`. Keep tokens in deployment secrets.
+python -m download_polyp_weights \
+  --cache-dir /srv/iquana/model-cache \
+  --env-file /srv/iquana/polyp-weights.env
+source /srv/iquana/polyp-weights.env
+# Start the AI service and its workers in this configured environment.
+```
+
+Choose writable deployment paths for the cache and output file. The command pins
+exact HF commits, verifies both SHA-256 hashes, and writes only checkpoint paths
+and the Cellpose digest to the shell file; it does not store the token. Existing
+configuration is preserved if a download or integrity check fails. Repeated runs
+reuse the Hub cache; `--local-files-only` verifies cached weights without network
+access. Retain the cache on persistent storage.
+
+For containers, mount that cache at the **same absolute path** used during setup,
+and pass the generated variables into the AI-service and worker containers.
+For systemd or another process manager, configure the equivalent environment
+variables on the services; this shell file uses `export` statements and is not a
+Docker `--env-file` or systemd `EnvironmentFile`. Do not commit the generated file.
+An HF token pushed through the running service's admin API does not configure
+this separate setup process: provide deployment credentials before running it.
+
+Existing manually configured checkpoint paths still work. No download occurs
+during model discovery or inference. Until the optional dependency and local file
+are configured, the provider remains `not_ready`. Restart after setup, then map
+model class `polyp` to the dataset label (for example, `Coral Polyp`) and select
+the model in Segment settings. Website users need no individual HF credentials.
+
+The pinned artifacts are `cpsam_best` and `yolo_polyp_finetuned.pt`.
+See [Cellpose setup](docs/cellpose-polyp.md) and [YOLO setup](docs/yolo-polyp.md)
+for device selection and inference behavior.
 
 | Variable | Default | Purpose |
 |---|---|---|
